@@ -350,8 +350,13 @@ export default function PriceListView({
             ) : (
               filteredProducts.map((p) => {
                 const opciones = getOpcionesUnidad(p);
-                const basePriceUsd = Number(p.precio_usd) || 0;
-                const basePriceBs = basePriceUsd * rate;
+                const taxRate = Number(p.impuesto_porcentaje) || 0;
+                const multiplier = 1 + taxRate / 100;
+
+                // Precio final con impuesto incluido
+                const basePriceNetUsd = Number(p.precio_usd) || 0;
+                const baseFinalPriceUsd = basePriceNetUsd * multiplier;
+                const baseFinalPriceBs = baseFinalPriceUsd * rate;
                 const stock = Number(p.stock_actual) || 0;
                 const isOutOfStock = stock <= 0;
 
@@ -407,57 +412,108 @@ export default function PriceListView({
                             </span>
                           )}
 
-                          {Number(p.impuesto_porcentaje) > 0 && (
+                          {taxRate > 0 ? (
                             <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                              +IVA {p.impuesto_porcentaje}%
+                              IVA {taxRate}% Incl.
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-slate-500/10 text-slate-500 dark:text-slate-400 border border-slate-500/20">
+                              Exento
                             </span>
                           )}
                         </div>
 
-                        {/* Botones de presentación directa para agregar una u otra */}
-                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                          <span className="text-[11px] font-medium text-slate-400">
-                            Agregar por:
+                        {/* Lista de Presentaciones en Líneas Individuales */}
+                        <div className="pt-1.5 space-y-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                            Presentaciones Disponibles:
                           </span>
-                          {opciones.map((opc, idx) => {
-                            const isThisPresAdded = occurrencesInCotizacion.some(
-                              (it) => it.opcion.id === opc.id
-                            );
-                            return (
-                              <button
-                                key={idx}
-                                type="button"
-                                onClick={(e) => handleAddPresentation(p, opc, e)}
-                                title={`Agregar ${opc.nombre} a la cotización`}
-                                className={`text-[11px] font-bold px-2.5 py-1 rounded-xl border transition flex items-center gap-1.5 ${
-                                  isThisPresAdded
-                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                                    : isDarkMode
-                                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                                    : 'bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 border-slate-200'
-                                }`}
-                              >
-                                <Plus className="w-3 h-3" />
-                                <span>{opc.nombre}</span>
-                                <span className="font-mono opacity-80">(${opc.precio_usd.toFixed(2)})</span>
-                              </button>
-                            );
-                          })}
+                          <div className="space-y-1">
+                            {opciones.map((opc, idx) => {
+                              const isThisPresAdded = occurrencesInCotizacion.some(
+                                (it) => it.opcion.id === opc.id
+                              );
+                              const opcFinalPriceUsd = opc.precio_usd * multiplier;
+                              const opcFinalPriceBs = opcFinalPriceUsd * rate;
+
+                              return (
+                                <div
+                                  key={idx}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAddPresentation(p, opc);
+                                  }}
+                                  className={`flex items-center justify-between p-2 rounded-xl border text-xs transition cursor-pointer ${
+                                    isThisPresAdded
+                                      ? isDarkMode
+                                        ? 'bg-indigo-950/60 border-indigo-500/80'
+                                        : 'bg-indigo-50/90 border-indigo-300'
+                                      : isDarkMode
+                                      ? 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/80'
+                                      : 'bg-slate-50 hover:bg-slate-100 border-slate-200'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className={`p-1 rounded-md text-[10px] font-bold ${
+                                        isThisPresAdded
+                                          ? 'bg-indigo-600 text-white'
+                                          : isDarkMode
+                                          ? 'bg-slate-700 text-slate-300'
+                                          : 'bg-slate-200 text-slate-700'
+                                      }`}
+                                    >
+                                      <Plus className="w-3 h-3" />
+                                    </span>
+                                    <span className="font-bold text-slate-800 dark:text-slate-100">
+                                      {opc.nombre}
+                                    </span>
+                                    {opc.factor > 1 && (
+                                      <span className="text-[10px] font-mono text-slate-400">
+                                        (x{opc.factor} {p.unidad_base || 'unid'})
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="text-right">
+                                    <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                                      ${opcFinalPriceUsd.toFixed(2)}
+                                    </span>
+                                    <span className="font-mono text-[10px] text-slate-400 ml-2">
+                                      {opcFinalPriceBs.toLocaleString('es-VE', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}{' '}
+                                      Bs.
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
                       </div>
 
-                      {/* Precios Principales */}
+                      {/* Precios Principales (Precio Final Unidad Base) */}
                       <div className="text-right shrink-0">
-                        <div className="font-mono font-black text-lg text-emerald-600 dark:text-emerald-400">
-                          ${basePriceUsd.toFixed(2)}
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
+                          Unidad Base
+                        </div>
+                        <div className="font-mono font-black text-lg text-emerald-600 dark:text-emerald-400 leading-tight">
+                          ${baseFinalPriceUsd.toFixed(2)}
                         </div>
                         <div className="font-mono text-xs font-semibold text-slate-500 dark:text-slate-400">
-                          {basePriceBs.toLocaleString('es-VE', {
+                          {baseFinalPriceBs.toLocaleString('es-VE', {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}{' '}
                           <span className="text-[10px]">Bs.</span>
                         </div>
+                        {taxRate > 0 && (
+                          <div className="text-[9px] font-mono text-slate-400 mt-0.5">
+                            (Base: ${basePriceNetUsd.toFixed(2)})
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
