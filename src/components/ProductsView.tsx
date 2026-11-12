@@ -153,8 +153,8 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
         return;
       }
       const f = Number(pr.factor);
-      if (isNaN(f) || f <= 1) {
-        setErrorMsg(`La presentación "${pr.nombre}" debe tener un factor mayor a 1 (ej: 20 unidades).`);
+      if (isNaN(f) || f <= 0) {
+        setErrorMsg(`La presentación "${pr.nombre}" debe tener un factor numérico mayor a 0 (ej: 1 para unidad especial, o 20 para bulto).`);
         return;
       }
       const p = Number(pr.precio_usd);
@@ -525,17 +525,17 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                 </div>
               </div>
 
-              {/* SECCIÓN DE PRESENTACIONES / BULTO / CAJA */}
+              {/* SECCIÓN DE PRESENTACIONES / MEDIDAS / EQUIVALENCIAS */}
               <div className={`p-4 rounded-2xl border space-y-3 ${
                 isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
               }`}>
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
-                      <Boxes className="w-4 h-4" /> Presentaciones Mayores (Bulto, Caja, Paquete)
+                      <Boxes className="w-4 h-4" /> Presentaciones & Medidas (Bulto, Caja, Unidad Especial, etc.)
                     </h4>
                     <p className={`text-[11px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Permite comprar o vender en bultos con precio propio al mayor. El stock se descuenta en unidades base automáticamente.
+                      Permite comprar o vender en presentaciones con precio propio (incluso con factor 1 para unidades especiales o paquetes alternativos).
                     </p>
                   </div>
                   <button
@@ -580,7 +580,7 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                             value={pr.factor}
                             onChange={(val) => handleUpdatePresentationRow(index, 'factor', String(val))}
                             decimals={2}
-                            min={1}
+                            min={0.01}
                             className={`w-full px-3 py-1.5 rounded-xl border text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
                               isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
                             }`}

@@ -99,7 +99,7 @@ export async function POST(req: Request) {
           const presFactor = Number(pres.factor);
           const presPrecio = Math.max(0, Number(pres.precio_usd) || 0);
 
-          if (!presNombre || !presFactor || presFactor <= 1) continue;
+          if (!presNombre || !presFactor || presFactor <= 0) continue;
 
           // Ver si ya existe la presentación para este producto
           const existingPres = await client.query(

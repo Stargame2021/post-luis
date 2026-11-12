@@ -262,46 +262,29 @@ export default function ImportExcelView({
           const existing = groupedMap.get(key);
 
           if (!existing) {
-            // Primer registro de este producto
-            if (r.factor <= 1) {
-              groupedMap.set(key, {
-                nombre: r.producto,
-                unidad_base: r.presentacion || 'Unidad',
-                precio_usd: r.precio,
-                stock_actual: r.existencia,
-                presentaciones: [],
-              });
-            } else {
-              // Si vino primero una presentación secundaria, asumimos unidad base como 'Unidad'
-              groupedMap.set(key, {
-                nombre: r.producto,
-                unidad_base: 'Unidad',
-                precio_usd: r.precio / r.factor,
-                stock_actual: r.existencia,
-                presentaciones: [
-                  {
-                    nombre: r.presentacion,
-                    factor: r.factor,
-                    precio_usd: r.precio,
-                  },
-                ],
-              });
-            }
+            // Primer registro de este producto: se toma como unidad base
+            groupedMap.set(key, {
+              nombre: r.producto,
+              unidad_base: r.presentacion || 'Unidad',
+              precio_usd: r.precio,
+              stock_actual: r.existencia,
+              presentaciones: [],
+            });
           } else {
-            // Ya existía el producto: si la fila es una presentación (> 1), agregarla
-            if (r.factor > 1) {
+            // Siguientes registros del mismo producto:
+            // Si el nombre de la presentación coincide con la unidad base ya guardada, actualiza precio o stock
+            if (r.presentacion.toLowerCase() === existing.unidad_base.toLowerCase()) {
+              existing.precio_usd = r.precio;
+              if (r.existencia > 0) {
+                existing.stock_actual = r.existencia;
+              }
+            } else {
+              // Si es otra presentación (incluso con factor 1 como "Unidad Especial"), se agrega como presentación adicional
               existing.presentaciones.push({
                 nombre: r.presentacion,
                 factor: r.factor,
                 precio_usd: r.precio,
               });
-            } else {
-              // Si es la unidad base y no tenía precio establecido
-              existing.unidad_base = r.presentacion || existing.unidad_base;
-              existing.precio_usd = r.precio;
-              if (r.existencia > 0) {
-                existing.stock_actual = r.existencia;
-              }
             }
           }
         }

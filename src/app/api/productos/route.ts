@@ -42,9 +42,9 @@ function parsePresentaciones(raw: unknown): PresentacionInput[] {
     const factor = Number(r?.factor);
     const precio = Number(r?.precio_usd);
     if (!nombre && !factor) continue; // fila vacía
-    if (!nombre) throw new Error('Cada presentación debe tener un nombre (ej: Bulto, Caja, Paquete).');
-    if (!factor || factor <= 1) {
-      throw new Error(`La presentación "${nombre}" debe equivaler a más de 1 unidad base.`);
+    if (!nombre) throw new Error('Cada presentación debe tener un nombre (ej: Bulto, Caja, Paquete, Unidad Especial).');
+    if (!factor || factor <= 0) {
+      throw new Error(`La presentación "${nombre}" debe tener un factor numérico mayor a 0.`);
     }
     if (isNaN(precio) || precio < 0) {
       throw new Error(`El precio de la presentación "${nombre}" no es válido.`);
