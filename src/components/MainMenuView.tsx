@@ -28,6 +28,8 @@ import {
   Server,
   Wallet,
   Building2,
+  Tag,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { Tasa, DashboardData, Usuario, ModuloPermiso } from '@/types';
 
@@ -130,8 +132,20 @@ export default function MainMenuView({
       stat: 'Venta Directa',
     },
     {
-      id: 'compras',
+      id: 'price_list',
       num: '03',
+      title: 'Lista de Precios & Consulta',
+      subtitle: 'Consulta rápida de precios en USD/Bs., calculadora por cantidad y existencias',
+      icon: Tag,
+      gradient: 'from-blue-500 via-cyan-600 to-teal-500',
+      badge: 'Consulta Rápida',
+      accentColor: 'text-cyan-500 dark:text-cyan-400',
+      glowColor: 'group-hover:shadow-cyan-500/25',
+      stat: `${productsCount} productos`,
+    },
+    {
+      id: 'compras',
+      num: '04',
       title: 'Compras',
       subtitle: 'Recepción de mercancía, facturas de proveedores e incremento de stock',
       icon: Truck,
@@ -145,7 +159,7 @@ export default function MainMenuView({
     },
     {
       id: 'pagos',
-      num: '04',
+      num: '05',
       title: 'Gestión de Pagos / Cobros',
       subtitle: 'Cobros a clientes, abonos a créditos, pagos a proveedores y flujo de caja en bancos',
       icon: Wallet,
@@ -287,8 +301,9 @@ export default function MainMenuView({
 
   // Group 4 (Fourth view - Sistema, Usuarios y Base de Datos):
   // 14) Usuarios y Permisos
-  // 15) Mantenimiento y Respaldos
-  // 16) Configuración de Base de Datos
+  // 15) Importador Excel de Catálogo
+  // 16) Mantenimiento y Respaldos
+  // 17) Configuración de Base de Datos
   const group4 = [
     {
       id: 'users',
@@ -303,8 +318,20 @@ export default function MainMenuView({
       stat: 'Control de Acceso',
     },
     {
-      id: 'maintenance',
+      id: 'import_excel',
       num: '15',
+      title: 'Importador Excel',
+      subtitle: 'Carga masiva de productos, factores de empaque, presentaciones y existencias iniciales',
+      icon: FileSpreadsheet,
+      gradient: 'from-emerald-500 via-teal-600 to-cyan-600',
+      badge: 'Sistema / Datos',
+      accentColor: 'text-emerald-500 dark:text-emerald-400',
+      glowColor: 'group-hover:shadow-emerald-500/25',
+      stat: 'Plantilla .xlsx',
+    },
+    {
+      id: 'maintenance',
+      num: '16',
       title: 'Mantenimiento & Respaldos',
       subtitle: 'Limpieza de transacciones de prueba, reinicio de secuencias y descarga de copias SQL',
       icon: ShieldAlert,
@@ -319,7 +346,7 @@ export default function MainMenuView({
     },
     {
       id: 'db_config',
-      num: '16',
+      num: '17',
       title: 'Conexión a Base de Datos',
       subtitle: 'Verificar parámetros de PostgreSQL (Host, Puerto, Usuario, Base de datos y SSL)',
       icon: Database,
@@ -339,9 +366,11 @@ export default function MainMenuView({
     const perms = currentUser.permisos;
     if (id === 'dashboard') return true;
     if (id === 'pos') return perms.includes('pos');
+    if (id === 'price_list') return perms.includes('price_list') || perms.includes('pos');
     if (id === 'orders') return perms.includes('orders');
     if (id === 'compras') return perms.includes('compras');
     if (id === 'products') return perms.includes('products');
+    if (id === 'import_excel') return perms.includes('import_excel') || perms.includes('products');
     if (id === 'terceros') return perms.includes('terceros');
     if (id === 'bancos') return perms.includes('terceros') || perms.includes('compras') || perms.includes('users');
     if (id === 'impuestos') return perms.includes('impuestos');

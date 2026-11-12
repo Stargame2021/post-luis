@@ -31,6 +31,8 @@ import TercerosView from '@/components/TercerosView';
 import ImpuestosView from '@/components/ImpuestosView';
 import ReportesView from '@/components/ReportesView';
 import UsuariosView from '@/components/UsuariosView';
+import PriceListView from '@/components/PriceListView';
+import ImportExcelView from '@/components/ImportExcelView';
 import PagosView from '@/components/PagosView';
 import BancosCuentasView from '@/components/BancosCuentasView';
 import LoginModal from '@/components/LoginModal';
@@ -38,9 +40,9 @@ import DatabaseModal from '@/components/DatabaseModal';
 import QrModal from '@/components/QrModal';
 import MantenimientoModal from '@/components/MantenimientoModal';
 import { Producto, Tasa, DashboardData, Usuario, ModuloPermiso } from '@/types';
-import { UserCheck, LogOut, Shield } from 'lucide-react';
+import { UserCheck, LogOut, Shield, Tag, FileSpreadsheet } from 'lucide-react';
 
-type ActiveTab = 'menu' | 'dashboard' | 'pos' | 'orders' | 'compras' | 'pagos' | 'products' | 'terceros' | 'bancos' | 'impuestos' | 'rates' | 'reports' | 'users';
+type ActiveTab = 'menu' | 'dashboard' | 'pos' | 'price_list' | 'orders' | 'compras' | 'pagos' | 'products' | 'import_excel' | 'terceros' | 'bancos' | 'impuestos' | 'rates' | 'reports' | 'users';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('menu');
@@ -50,7 +52,7 @@ export default function Home() {
   const [showQrModal, setShowQrModal] = useState(false);
   const [dbConnected, setDbConnected] = useState(true);
   const [pagosInitialAction, setPagosInitialAction] = useState<any | null>(null);
-  
+
   // Auth state
   const [currentUser, setCurrentUser] = useState<Usuario | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -163,9 +165,11 @@ export default function Home() {
     const perms = currentUser.permisos;
     if (tab === 'menu' || tab === 'dashboard') return true;
     if (tab === 'pos') return perms.includes('pos');
+    if (tab === 'price_list') return perms.includes('price_list') || perms.includes('pos');
     if (tab === 'orders') return perms.includes('orders');
     if (tab === 'compras') return perms.includes('compras');
     if (tab === 'products') return perms.includes('products');
+    if (tab === 'import_excel') return perms.includes('import_excel') || perms.includes('products');
     if (tab === 'terceros') return perms.includes('terceros');
     if (tab === 'impuestos') return perms.includes('impuestos');
     if (tab === 'rates') return perms.includes('rates');
@@ -177,22 +181,21 @@ export default function Home() {
   const navItems = [
     { id: 'menu', label: 'Inicio', icon: LayoutGrid },
     { id: 'pos', label: 'Punto de Venta', icon: ShoppingCart },
+    { id: 'price_list', label: 'Lista de Precios', icon: Tag },
     { id: 'compras', label: 'Compras', icon: Truck },
     { id: 'reports', label: 'Reportes', icon: BarChart3 },
   ] as const;
 
   return (
-    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${
-      isDarkMode 
-        ? 'bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white' 
-        : 'bg-slate-50 text-slate-900 selection:bg-indigo-500 selection:text-white'
-    }`}>
-      {/* Top Navigation Bar */}
-      <header className={`print:hidden sticky top-0 z-40 backdrop-blur-xl border-b transition-colors ${
-        isDarkMode
-          ? 'bg-slate-950/80 border-slate-800/80'
-          : 'bg-white/90 border-slate-200/90 shadow-sm'
+    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${isDarkMode
+      ? 'bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white'
+      : 'bg-slate-50 text-slate-900 selection:bg-indigo-500 selection:text-white'
       }`}>
+      {/* Top Navigation Bar */}
+      <header className={`print:hidden sticky top-0 z-40 backdrop-blur-xl border-b transition-colors ${isDarkMode
+        ? 'bg-slate-950/80 border-slate-800/80'
+        : 'bg-white/90 border-slate-200/90 shadow-sm'
+        }`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
           {/* Logo & Store Brand */}
           <div className="flex items-center gap-1.5 shrink-0">
@@ -212,9 +215,8 @@ export default function Home() {
                 <Store className="w-5 h-5 text-white" />
               </div>
               <div className="hidden sm:block">
-                <h1 className={`font-bold text-sm tracking-tight flex items-center gap-1.5 ${
-                  isDarkMode ? 'text-white' : 'text-slate-900'
-                }`}>
+                <h1 className={`font-bold text-sm tracking-tight flex items-center gap-1.5 ${isDarkMode ? 'text-white' : 'text-slate-900'
+                  }`}>
                   Tienda Express{' '}
                   <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 dark:bg-indigo-500/20 border border-indigo-500/20">
                     POS
@@ -231,11 +233,10 @@ export default function Home() {
               type="button"
               onClick={() => setShowQrModal(true)}
               title="Abrir Código QR para Móvil"
-              className={`p-1.5 rounded-xl border transition flex items-center gap-1 text-xs font-semibold ${
-                isDarkMode
-                  ? 'bg-indigo-950/40 border-indigo-500/30 text-indigo-300 hover:bg-indigo-900/60'
-                  : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 shadow-sm'
-              }`}
+              className={`p-1.5 rounded-xl border transition flex items-center gap-1 text-xs font-semibold ${isDarkMode
+                ? 'bg-indigo-950/40 border-indigo-500/30 text-indigo-300 hover:bg-indigo-900/60'
+                : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 shadow-sm'
+                }`}
             >
               <QrCode className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span className="hidden lg:inline text-[11px]">QR Móvil</span>
@@ -243,11 +244,10 @@ export default function Home() {
           </div>
 
           {/* Navigation Tabs (Desktop & Tablet) */}
-          <nav className={`hidden sm:flex items-center p-1 rounded-2xl border transition-colors ${
-            isDarkMode 
-              ? 'bg-slate-900/90 border-slate-800' 
-              : 'bg-slate-100/90 border-slate-200'
-          }`}>
+          <nav className={`hidden sm:flex items-center p-1 rounded-2xl border transition-colors ${isDarkMode
+            ? 'bg-slate-900/90 border-slate-800'
+            : 'bg-slate-100/90 border-slate-200'
+            }`}>
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -255,13 +255,12 @@ export default function Home() {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id as ActiveTab)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
-                    isActive
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/25'
-                      : isDarkMode
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition ${isActive
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/25'
+                    : isDarkMode
                       ? 'text-slate-400 hover:text-white'
                       : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                    }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                   {item.label}
@@ -276,11 +275,10 @@ export default function Home() {
             {currentRate && (
               <div
                 onClick={() => setActiveTab('rates')}
-                className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs cursor-pointer transition ${
-                  isDarkMode
-                    ? 'bg-slate-900 border-slate-800 hover:border-slate-700'
-                    : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
-                }`}
+                className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs cursor-pointer transition ${isDarkMode
+                  ? 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                  : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
+                  }`}
               >
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className={isDarkMode ? 'text-slate-400' : 'text-slate-500'}>Tasa:</span>
@@ -290,29 +288,14 @@ export default function Home() {
               </div>
             )}
 
-            {/* Mobile QR Button */}
-            <button
-              onClick={() => setShowQrModal(true)}
-              title="Escanear Código QR para Teléfono"
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition ${
-                isDarkMode
-                  ? 'bg-indigo-950/40 border-indigo-500/30 text-indigo-300 hover:bg-indigo-900/60'
-                  : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 shadow-sm'
-              }`}
-            >
-              <QrCode className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-              <span className="hidden md:inline">Código QR</span>
-            </button>
-
             {/* Light / Dark Mode Toggle */}
             <button
               onClick={toggleTheme}
               title={isDarkMode ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-              className={`p-2 rounded-xl border transition flex items-center justify-center ${
-                isDarkMode
-                  ? 'bg-slate-900 border-slate-800 text-amber-300 hover:text-amber-200 hover:bg-slate-800'
-                  : 'bg-white border-slate-200 text-slate-700 hover:text-indigo-600 hover:bg-slate-100 shadow-sm'
-              }`}
+              className={`p-2 rounded-xl border transition flex items-center justify-center ${isDarkMode
+                ? 'bg-slate-900 border-slate-800 text-amber-300 hover:text-amber-200 hover:bg-slate-800'
+                : 'bg-white border-slate-200 text-slate-700 hover:text-indigo-600 hover:bg-slate-100 shadow-sm'
+                }`}
             >
               {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
@@ -322,48 +305,13 @@ export default function Home() {
               onClick={() => fetchData()}
               disabled={isRefreshing}
               title="Refrescar Datos"
-              className={`p-2 rounded-xl border transition disabled:opacity-50 ${
-                isDarkMode
-                  ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 shadow-sm'
-              }`}
+              className={`p-2 rounded-xl border transition disabled:opacity-50 ${isDarkMode
+                ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 shadow-sm'
+                }`}
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-indigo-500' : ''}`} />
             </button>
-
-            {/* DB Status & Config Button */}
-            <button
-              onClick={() => setShowDbModal(true)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition ${
-                dbConnected
-                  ? isDarkMode
-                    ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300 hover:bg-emerald-950/50'
-                    : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100 shadow-sm'
-                  : isDarkMode
-                  ? 'bg-rose-950/30 border-rose-500/30 text-rose-300 hover:bg-rose-950/50'
-                  : 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100 shadow-sm'
-              }`}
-            >
-              <Database className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">
-                {dbConnected ? 'BD Conectada' : 'Configurar BD'}
-              </span>
-            </button>
-
-            {/* Mantenimiento / Sistemas Button (Solo si tiene permiso 'maintenance') */}
-            {(!currentUser || currentUser.permisos?.includes('maintenance')) && (
-              <button
-                onClick={() => setShowMantenimientoModal(true)}
-                title="Herramienta de Mantenimiento de Base de Datos y Pruebas"
-                className={`p-2 rounded-xl border transition flex items-center justify-center ${
-                  isDarkMode
-                    ? 'bg-rose-950/20 border-rose-900/40 text-rose-400 hover:bg-rose-900/40'
-                    : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100 shadow-sm'
-                }`}
-              >
-                <ShieldAlert className="w-4 h-4" />
-              </button>
-            )}
 
             {/* Usuario Actual & Cerrar Sesión */}
             {currentUser ? (
@@ -376,11 +324,10 @@ export default function Home() {
                     }
                   }}
                   title={`Usuario: ${currentUser.nombre_completo} (${currentUser.rol_nombre})`}
-                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition ${
-                    isDarkMode
-                      ? 'bg-slate-900 border-slate-800 text-slate-200 hover:border-slate-700'
-                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm'
-                  }`}
+                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition ${isDarkMode
+                    ? 'bg-slate-900 border-slate-800 text-slate-200 hover:border-slate-700'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm'
+                    }`}
                 >
                   <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white flex items-center justify-center text-[10px] font-bold">
                     {currentUser.username.slice(0, 1).toUpperCase()}
@@ -392,11 +339,10 @@ export default function Home() {
                   type="button"
                   onClick={handleLogout}
                   title="Cerrar Sesión"
-                  className={`p-2 rounded-xl border transition text-rose-500 hover:text-rose-600 ${
-                    isDarkMode
-                      ? 'bg-slate-900 border-slate-800 hover:bg-rose-950/40'
-                      : 'bg-white border-slate-200 hover:bg-rose-50 shadow-sm'
-                  }`}
+                  className={`p-2 rounded-xl border transition text-rose-500 hover:text-rose-600 ${isDarkMode
+                    ? 'bg-slate-900 border-slate-800 hover:bg-rose-950/40'
+                    : 'bg-white border-slate-200 hover:bg-rose-50 shadow-sm'
+                    }`}
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
@@ -414,9 +360,8 @@ export default function Home() {
         </div>
 
         {/* Mobile Navigation Bar */}
-        <div className={`sm:hidden border-t px-3 py-2 flex items-center justify-around gap-2 transition-colors ${
-          isDarkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-slate-50/90 border-slate-200 shadow-inner'
-        }`}>
+        <div className={`sm:hidden border-t px-3 py-2 flex items-center justify-around gap-2 transition-colors ${isDarkMode ? 'bg-slate-950/90 border-slate-800' : 'bg-slate-50/90 border-slate-200 shadow-inner'
+          }`}>
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -424,13 +369,12 @@ export default function Home() {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id as ActiveTab)}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
-                  isActive
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : isDarkMode
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${isActive
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                  : isDarkMode
                     ? 'bg-slate-900 text-slate-400 border border-slate-800'
                     : 'bg-white text-slate-600 border border-slate-200 shadow-sm'
-                }`}
+                  }`}
               >
                 <Icon className="w-3.5 h-3.5" />
                 {item.label}
@@ -446,11 +390,10 @@ export default function Home() {
           <div className="mb-5 flex items-center justify-between">
             <button
               onClick={() => setActiveTab('menu')}
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold border transition shadow-sm ${
-                isDarkMode
-                  ? 'bg-slate-900/90 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-850'
-                  : 'bg-white border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold border transition shadow-sm ${isDarkMode
+                ? 'bg-slate-900/90 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-850'
+                : 'bg-white border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50'
+                }`}
             >
               <LayoutGrid className="w-3.5 h-3.5 text-indigo-500" />
               ← Menú Principal
@@ -488,6 +431,14 @@ export default function Home() {
           />
         )}
 
+        {activeTab === 'price_list' && (
+          <PriceListView
+            products={products}
+            currentRate={currentRate}
+            isDarkMode={isDarkMode}
+          />
+        )}
+
         {activeTab === 'orders' && (
           <OrdersView
             isDarkMode={isDarkMode}
@@ -519,6 +470,14 @@ export default function Home() {
           <ProductsView
             products={products}
             onRefresh={fetchData}
+            onNavigateImportExcel={() => setActiveTab('import_excel')}
+            isDarkMode={isDarkMode}
+          />
+        )}
+
+        {activeTab === 'import_excel' && (
+          <ImportExcelView
+            onImportCompleted={fetchData}
             isDarkMode={isDarkMode}
           />
         )}
@@ -575,11 +534,10 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className={`border-t py-4 text-center text-xs transition-colors ${
-        isDarkMode
-          ? 'border-slate-800/80 bg-slate-950 text-slate-500'
-          : 'border-slate-200 bg-white text-slate-400 shadow-inner'
-      }`}>
+      <footer className={`border-t py-4 text-center text-xs transition-colors ${isDarkMode
+        ? 'border-slate-800/80 bg-slate-950 text-slate-500'
+        : 'border-slate-200 bg-white text-slate-400 shadow-inner'
+        }`}>
         Tienda Express &bull; POS, Compras, Inventario, Terceros e Impuestos &bull; PostgreSQL
       </footer>
 

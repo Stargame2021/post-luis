@@ -21,6 +21,8 @@ import { Usuario, Rol, ModuloPermiso } from '@/types';
 
 const MODULOS_DISPONIBLES: { id: ModuloPermiso; label: string; desc: string }[] = [
   { id: 'pos', label: 'Punto de Venta (POS)', desc: 'Facturación y cobro directo' },
+  { id: 'price_list', label: 'Lista de Precios / Consulta Rápida', desc: 'Consulta de precios, existencias y calculadora para empleados' },
+  { id: 'import_excel', label: 'Importador Excel de Catálogo', desc: 'Carga masiva de productos y presentaciones desde Excel' },
   { id: 'orders', label: 'Historial de Pedidos', desc: 'Consultar y reimprimir ventas' },
   { id: 'compras', label: 'Compras', desc: 'Registro de facturas de proveedores' },
   { id: 'products', label: 'Productos / Inventario', desc: 'Administrar catálogo, precios y stock' },

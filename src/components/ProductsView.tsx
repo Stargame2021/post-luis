@@ -18,11 +18,13 @@ import {
   AlertTriangle,
   Scale,
   Boxes,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface ProductsViewProps {
   products: Producto[];
   onRefresh: () => void;
+  onNavigateImportExcel?: () => void;
   isDarkMode?: boolean;
 }
 
@@ -33,7 +35,7 @@ interface PresFormItem {
   precio_usd: string;
 }
 
-export default function ProductsView({ products, onRefresh, isDarkMode = false }: ProductsViewProps) {
+export default function ProductsView({ products, onRefresh, onNavigateImportExcel, isDarkMode = false }: ProductsViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Producto | null>(null);
@@ -256,6 +258,20 @@ export default function ProductsView({ products, onRefresh, isDarkMode = false }
               }`}
             />
           </div>
+          {onNavigateImportExcel && (
+            <button
+              onClick={onNavigateImportExcel}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-semibold border transition shadow-sm shrink-0 ${
+                isDarkMode
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
+              }`}
+              title="Importar catálogo masivo desde archivo Excel"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+              <span>Importar Excel</span>
+            </button>
+          )}
           <button
             onClick={handleOpenAdd}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold transition shadow-md shadow-indigo-600/20 shrink-0"

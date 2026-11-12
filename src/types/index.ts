@@ -295,9 +295,11 @@ export interface DashboardData {
 
 export type ModuloPermiso =
   | 'pos'
+  | 'price_list'
   | 'orders'
   | 'compras'
   | 'products'
+  | 'import_excel'
   | 'terceros'
   | 'rates'
   | 'impuestos'
