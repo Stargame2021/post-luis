@@ -434,8 +434,8 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
 
       {/* Modal Crear / Editar */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-150 overflow-y-auto">
-          <div className={`w-full max-w-2xl rounded-2xl border shadow-2xl p-6 my-8 transition-all max-h-[90vh] overflow-y-auto ${
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-150 overflow-y-auto">
+          <div className={`w-full max-w-4xl rounded-2xl border shadow-2xl p-6 sm:p-8 my-6 transition-all max-h-[92vh] overflow-y-auto ${
             isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
           }`}>
             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
@@ -467,8 +467,8 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                 />
               </div>
 
-              {/* Unidad Base y Precio Base */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Unidad Base, Precio Base, Precio Final y Alícuota */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400 flex items-center gap-1">
                     <Scale className="w-3.5 h-3.5 text-indigo-500" /> Unidad Base *
@@ -484,13 +484,13 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                     }`}
                   />
                   <p className="text-[10px] text-slate-400 mt-1">
-                    La unidad mínima de inventario
+                    Unidad mínima de inventario
                   </p>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
-                    Precio Venta Unidad (USD) *
+                    Precio Base (Sin IVA) *
                   </label>
                   <div className="relative">
                     <DollarSign className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -503,6 +503,45 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                       }`}
                     />
                   </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Antes de impuestos
+                  </p>
+                </div>
+
+                {/* Campo Editable: PVP Final (calcula automáticamente el precio base) */}
+                <div>
+                  {(() => {
+                    const selTax = taxes.find((t) => t.id === Number(formData.impuesto_id));
+                    const pct = selTax ? Number(selTax.porcentaje) : 0;
+                    const baseUsd = parseFloat(formData.precio_usd) || 0;
+                    const finalUsd = Number((baseUsd * (1 + pct / 100)).toFixed(2));
+
+                    return (
+                      <div>
+                        <label className="block text-xs font-semibold mb-1 text-emerald-600 dark:text-emerald-400">
+                          PVP Final (Con IVA) *
+                        </label>
+                        <div className="relative">
+                          <DollarSign className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500" />
+                          <PosNumberInput
+                            value={finalUsd}
+                            onChange={(finalVal) => {
+                              const fVal = Number(finalVal) || 0;
+                              const newBase = pct > 0 ? fVal / (1 + pct / 100) : fVal;
+                              setFormData({ ...formData, precio_usd: newBase.toFixed(2) });
+                            }}
+                            decimals={2}
+                            className={`w-full pl-9 pr-3 py-2 rounded-xl border text-sm font-mono font-bold text-emerald-600 dark:text-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${
+                              isDarkMode ? 'bg-slate-800 border-emerald-500/40' : 'bg-emerald-50/40 border-emerald-300'
+                            }`}
+                          />
+                        </div>
+                        <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1">
+                          {pct > 0 ? `Calcula base con ${pct}% IVA` : 'Exento'}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div>
@@ -522,6 +561,9 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                       </option>
                     ))}
                   </select>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Tasa impositiva aplicable
+                  </p>
                 </div>
               </div>
 
@@ -554,63 +596,87 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                 ) : (
                   <div className="space-y-2">
                     <div className="grid grid-cols-12 gap-2 text-[11px] font-bold uppercase text-slate-400 px-1">
-                      <span className="col-span-4">Nombre (ej: Bulto)</span>
-                      <span className="col-span-3">Equivale a ({formData.unidad_base || 'Unidades'})</span>
-                      <span className="col-span-4">Precio Venta (USD)</span>
+                      <span className="col-span-3">Nombre (ej: Bulto)</span>
+                      <span className="col-span-2">Equivale ({formData.unidad_base || 'Unid.'})</span>
+                      <span className="col-span-3">Precio Base (USD)</span>
+                      <span className="col-span-3">PVP Final (Con IVA)</span>
                       <span className="col-span-1 text-center">Quitar</span>
                     </div>
 
-                    {formData.presentaciones.map((pr, index) => (
-                      <div key={index} className="grid grid-cols-12 gap-2 items-center">
-                        <div className="col-span-4">
-                          <input
-                            type="text"
-                            required
-                            placeholder="Ej: Bulto"
-                            value={pr.nombre}
-                            onChange={(e) => handleUpdatePresentationRow(index, 'nombre', e.target.value)}
-                            className={`w-full px-3 py-1.5 rounded-xl border text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
-                              isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
-                            }`}
-                          />
-                        </div>
+                    {formData.presentaciones.map((pr, index) => {
+                      const selTax = taxes.find((t) => t.id === Number(formData.impuesto_id));
+                      const pct = selTax ? Number(selTax.porcentaje) : 0;
+                      const baseUsd = parseFloat(pr.precio_usd) || 0;
+                      const finalUsd = Number((baseUsd * (1 + pct / 100)).toFixed(2));
 
-                        <div className="col-span-3">
-                          <PosNumberInput
-                            value={pr.factor}
-                            onChange={(val) => handleUpdatePresentationRow(index, 'factor', String(val))}
-                            decimals={2}
-                            min={0.01}
-                            className={`w-full px-3 py-1.5 rounded-xl border text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
-                              isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
-                            }`}
-                          />
-                        </div>
+                      return (
+                        <div key={index} className="grid grid-cols-12 gap-2 items-center">
+                          <div className="col-span-3">
+                            <input
+                              type="text"
+                              required
+                              placeholder="Ej: Bulto"
+                              value={pr.nombre}
+                              onChange={(e) => handleUpdatePresentationRow(index, 'nombre', e.target.value)}
+                              className={`w-full px-3 py-1.5 rounded-xl border text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                                isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+                              }`}
+                            />
+                          </div>
 
-                        <div className="col-span-4 relative">
-                          <DollarSign className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                          <PosNumberInput
-                            value={pr.precio_usd}
-                            onChange={(val) => handleUpdatePresentationRow(index, 'precio_usd', String(val))}
-                            decimals={2}
-                            className={`w-full pl-7 pr-3 py-1.5 rounded-xl border text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
-                              isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
-                            }`}
-                          />
-                        </div>
+                          <div className="col-span-2">
+                            <PosNumberInput
+                              value={pr.factor}
+                              onChange={(val) => handleUpdatePresentationRow(index, 'factor', String(val))}
+                              decimals={2}
+                              min={0.01}
+                              className={`w-full px-3 py-1.5 rounded-xl border text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                                isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+                              }`}
+                            />
+                          </div>
 
-                        <div className="col-span-1 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleRemovePresentationRow(index)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition"
-                            title="Eliminar presentación"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="col-span-3 relative">
+                            <DollarSign className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <PosNumberInput
+                              value={pr.precio_usd}
+                              onChange={(val) => handleUpdatePresentationRow(index, 'precio_usd', String(val))}
+                              decimals={2}
+                              className={`w-full pl-7 pr-3 py-1.5 rounded-xl border text-xs font-mono font-bold text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                                isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
+                              }`}
+                            />
+                          </div>
+
+                          <div className="col-span-3 relative">
+                            <DollarSign className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-500" />
+                            <PosNumberInput
+                              value={finalUsd}
+                              onChange={(val) => {
+                                const fVal = Number(val) || 0;
+                                const newBase = pct > 0 ? fVal / (1 + pct / 100) : fVal;
+                                handleUpdatePresentationRow(index, 'precio_usd', newBase.toFixed(2));
+                              }}
+                              decimals={2}
+                              className={`w-full pl-7 pr-3 py-1.5 rounded-xl border text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${
+                                isDarkMode ? 'bg-emerald-950/20 border-emerald-900/50' : 'bg-emerald-50/60 border-emerald-200'
+                              }`}
+                            />
+                          </div>
+
+                          <div className="col-span-1 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePresentationRow(index)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition"
+                              title="Eliminar presentación"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
