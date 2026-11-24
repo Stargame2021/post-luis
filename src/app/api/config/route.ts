@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getStoredDbConfig, saveStoredDbConfig, getPool } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const config = getStoredDbConfig();
     // Mask password in response for safety
@@ -25,6 +29,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
     const { host, port, user, password, database, ssl, testOnly } = body;

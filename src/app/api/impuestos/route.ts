@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET all taxes
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, {
+    permissions: ['impuestos', 'products', 'compras', 'pos'],
+  });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const onlyActive = searchParams.get('active') === 'true';
@@ -25,6 +31,9 @@ export async function GET(req: Request) {
 
 // POST create tax
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['impuestos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
     const { nombre, porcentaje, activo = true } = body;
@@ -60,6 +69,9 @@ export async function POST(req: Request) {
 
 // PUT update tax
 export async function PUT(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['impuestos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
     const { id, nombre, porcentaje, activo } = body;
@@ -91,6 +103,9 @@ export async function PUT(req: Request) {
 
 // DELETE delete or deactivate tax
 export async function DELETE(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['impuestos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');

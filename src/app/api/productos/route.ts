@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { PoolClient } from 'pg';
 import { getPool, query } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // Columnas comunes del producto (incluye unidad base y presentaciones activas como JSON)
 const PRODUCT_SELECT = `
@@ -106,6 +107,11 @@ async function fetchProduct(id: number) {
 
 // GET all products or active products with tax information
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, {
+    permissions: ['pos', 'price_list', 'products', 'compras', 'import_excel', 'orders', 'reports', 'reports_profit'],
+  });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const onlyActive = searchParams.get('active') === 'true';
@@ -128,6 +134,9 @@ export async function GET(req: Request) {
 
 // POST create product
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['products'] });
+  if (!auth.ok) return auth.response;
+
   const client = await getPool().connect();
   try {
     const body = await req.json();
@@ -188,6 +197,9 @@ export async function POST(req: Request) {
 
 // PUT update product
 export async function PUT(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['products'] });
+  if (!auth.ok) return auth.response;
+
   const client = await getPool().connect();
   try {
     const body = await req.json();
@@ -251,6 +263,9 @@ export async function PUT(req: Request) {
 
 // DELETE delete product (or toggle inactive if referenced)
 export async function DELETE(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['products'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');

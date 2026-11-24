@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getStoredDbConfig, getPool } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
+  if (!auth.ok) return auth.response;
+
   const pool = getPool();
   try {
     const config = getStoredDbConfig();
@@ -47,11 +51,16 @@ export async function GET() {
     ];
 
     for (const table of sortedTables) {
-      const dataRes = await pool.query(`SELECT * FROM ${table} ORDER BY id ASC`);
+      if (!/^[a-z_][a-z0-9_]*$/i.test(table)) continue;
+      const safeTable = `"${table}"`;
+      const dataRes = await pool.query(`SELECT * FROM ${safeTable} ORDER BY id ASC`);
       if (dataRes.rows.length === 0) continue;
 
       sqlDump += `-- -------------------------------------------------------------\n`;
       sqlDump += `-- Datos de la tabla: ${table} (${dataRes.rows.length} registros)\n`;
+      if (table === 'm_usuario') {
+        sqlDump += `-- NOTA DE SEGURIDAD: Las contraseñas (password_hash) fueron omitidas/redactadas por seguridad.\n`;
+      }
       sqlDump += `-- -------------------------------------------------------------\n`;
 
       const columns = Object.keys(dataRes.rows[0]);
@@ -59,7 +68,9 @@ export async function GET() {
 
       for (const row of dataRes.rows) {
         const values = columns.map(col => {
-          const val = row[col];
+          const val = table === 'm_usuario' && col === 'password_hash'
+            ? '__REDACTED_RESET_REQUIRED__'
+            : row[col];
           if (val === null || val === undefined) return 'NULL';
           if (typeof val === 'number') return val;
           if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
@@ -68,11 +79,11 @@ export async function GET() {
           return `'${String(val).replace(/'/g, "''")}'`;
         }).join(', ');
 
-        sqlDump += `INSERT INTO ${table} (${colList}) VALUES (${values}) ON CONFLICT DO NOTHING;\n`;
+        sqlDump += `INSERT INTO ${safeTable} (${colList}) VALUES (${values}) ON CONFLICT DO NOTHING;\n`;
       }
 
       // Reiniciar la secuencia de la tabla si existe
-      sqlDump += `SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${table}), 1), true);\n\n`;
+      sqlDump += `SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${safeTable}), 1), true);\n\n`;
     }
 
     const filename = `backup_pos_${new Date().toISOString().slice(0, 10)}_${Date.now()}.sql`;

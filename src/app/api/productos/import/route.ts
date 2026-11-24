@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 export interface PresentacionImportInput {
   nombre: string;
@@ -18,6 +19,9 @@ export interface ProductoImportInput {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['import_excel', 'products'] });
+  if (!auth.ok) return auth.response;
+
   const pool = getPool();
   const client = await pool.connect();
 

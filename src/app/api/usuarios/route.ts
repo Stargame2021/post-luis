@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
 import { query, ensureAuthTables } from '@/lib/db';
 import { hashPassword } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET: Listar usuarios
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['users'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const users = await query(
@@ -36,6 +40,9 @@ export async function GET() {
 
 // POST: Crear usuario
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['users'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
@@ -85,6 +92,9 @@ export async function POST(req: Request) {
 
 // PUT: Modificar usuario (datos, rol, contraseña opcional, activo/inactivo)
 export async function PUT(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['users'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
@@ -96,10 +106,17 @@ export async function PUT(req: Request) {
 
     const userId = Number(id);
 
-    // Evitar desactivar o cambiar a rol no-admin al usuario 1 (admin principal) si es el único
+    // Evitar desactivar o cambiar a rol no-admin al usuario 1 (admin principal)
     if (userId === 1 && activo === false) {
       return NextResponse.json(
         { success: false, message: 'No se puede desactivar al usuario administrador principal' },
+        { status: 400 }
+      );
+    }
+
+    if (userId === 1 && rol_id !== undefined && Number(rol_id) !== 1) {
+      return NextResponse.json(
+        { success: false, message: 'No se puede cambiar el rol del usuario administrador principal' },
         { status: 400 }
       );
     }
@@ -168,6 +185,9 @@ export async function PUT(req: Request) {
 
 // DELETE: Eliminar usuario
 export async function DELETE(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['users'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const { searchParams } = new URL(req.url);

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 export interface OrderLineInput {
   producto_id: number;
@@ -11,6 +12,9 @@ export interface OrderLineInput {
 
 // GET orders list (with items count, customer info, taxes and totals)
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['orders', 'pos', 'reports'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const limit = parseInt(searchParams.get('limit') || '50', 10);
@@ -109,6 +113,9 @@ export async function GET(req: Request) {
 
 // POST create order transaction with stock validation and inventory deduction
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['pos'] });
+  if (!auth.ok) return auth.response;
+
   const pool = getPool();
   const client = await pool.connect();
 
@@ -126,7 +133,6 @@ export async function POST(req: Request) {
       cuenta_bancaria_id = null,
       registrar_pago = true,
       monto_pago = null,
-      usuario_id = null,
       items,
     } = body;
 
@@ -333,7 +339,7 @@ export async function POST(req: Request) {
           rate,
           pagoEquivUsd,
           referencia_pago ? String(referencia_pago).trim() : null,
-          usuario_id ? Number(usuario_id) : null,
+          auth.session.user.id,
         ]
       );
 
@@ -404,6 +410,9 @@ export async function POST(req: Request) {
 
 // PATCH change order status (COMPLETADO, ANULADO)
 export async function PATCH(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['orders'] });
+  if (!auth.ok) return auth.response;
+
   const pool = getPool();
   const client = await pool.connect();
 

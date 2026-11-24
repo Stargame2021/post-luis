@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import os from 'os';
+import { requireAuth } from '@/lib/api-auth';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req);
+  if (!auth.ok) return auth.response;
+
   const nets = os.networkInterfaces();
   const addresses: string[] = [];
 

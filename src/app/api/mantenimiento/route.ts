@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
+  if (!auth.ok) return auth.response;
+
   const pool = getPool();
   try {
     const statsQuery = `
@@ -34,21 +38,40 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
+  if (!auth.ok) return auth.response;
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { success: false, message: 'Cuerpo de solicitud inválido.' },
+      { status: 400 }
+    );
+  }
+
+  const { action, resetStock, newStockValue, confirmPhrase } = body ?? {};
+
+  if (String(confirmPhrase || '').trim().toUpperCase() !== 'REINICIAR') {
+    return NextResponse.json(
+      { success: false, message: 'Frase de confirmación inválida. Escribe REINICIAR para continuar.' },
+      { status: 400 }
+    );
+  }
+
+  // action can be: 'reset_ventas' | 'reset_compras' | 'reset_ambos' | 'reset_all'
+  if (!['reset_ventas', 'reset_compras', 'reset_ambos', 'reset_all'].includes(action)) {
+    return NextResponse.json(
+      { success: false, message: 'Acción no válida solicitada.' },
+      { status: 400 }
+    );
+  }
+
   const pool = getPool();
   const client = await pool.connect();
 
   try {
-    const body = await req.json();
-    const { action, resetStock, newStockValue } = body;
-
-    // action can be: 'reset_ventas' | 'reset_compras' | 'reset_ambos' | 'reset_all'
-    if (!['reset_ventas', 'reset_compras', 'reset_ambos', 'reset_all'].includes(action)) {
-      return NextResponse.json(
-        { success: false, message: 'Acción no válida solicitada.' },
-        { status: 400 }
-      );
-    }
-
     await client.query('BEGIN');
 
     const executedActions: string[] = [];

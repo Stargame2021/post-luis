@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 export interface PurchaseLineInput {
   producto_id: number;
@@ -11,6 +12,9 @@ export interface PurchaseLineInput {
 
 // GET purchases list or single purchase with lines
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['compras'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const limit = parseInt(searchParams.get('limit') || '50', 10);
@@ -104,6 +108,9 @@ export async function GET(req: Request) {
 
 // POST register purchase and update inventory + average cost
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['compras'] });
+  if (!auth.ok) return auth.response;
+
   const pool = getPool();
   const client = await pool.connect();
 
@@ -122,7 +129,6 @@ export async function POST(req: Request) {
       estado = 'COMPLETADO',
       cuenta_bancaria_id = null,
       registrar_pago = true,
-      usuario_id = null,
       items,
     } = body;
 
@@ -318,7 +324,7 @@ export async function POST(req: Request) {
           rate,
           pagoEquivUsd,
           referencia_pago ? String(referencia_pago).trim() : null,
-          usuario_id ? Number(usuario_id) : null,
+          auth.session.user.id,
         ]
       );
 
@@ -419,6 +425,9 @@ export async function POST(req: Request) {
 
 // PATCH change purchase status (PROCESO, COMPLETADO, ANULADO)
 export async function PATCH(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['compras'] });
+  if (!auth.ok) return auth.response;
+
   const pool = getPool();
   const client = await pool.connect();
 

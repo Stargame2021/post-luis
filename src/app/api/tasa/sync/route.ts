@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import https from 'https';
 import * as cheerio from 'cheerio';
 import { query } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 function fetchBcvHtml(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -78,7 +79,10 @@ function parseBcvDate($: cheerio.CheerioAPI): string {
   return now.toISOString().split('T')[0];
 }
 
-export async function POST() {
+export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['rates'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const html = await fetchBcvHtml();
     const $ = cheerio.load(html);
