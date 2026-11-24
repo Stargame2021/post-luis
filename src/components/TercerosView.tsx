@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Tercero, TipoTercero } from '@/types';
+import { useConfirm, useToast } from '@/components/ui/ToastProvider';
 import {
   Users,
   Plus,
@@ -24,6 +25,8 @@ interface TercerosViewProps {
 }
 
 export default function TercerosView({ isDarkMode = false }: TercerosViewProps) {
+  const { showToast } = useToast();
+  const confirmDialog = useConfirm();
   const [terceros, setTerceros] = useState<Tercero[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -130,10 +133,16 @@ export default function TercerosView({ isDarkMode = false }: TercerosViewProps) 
 
   const handleDelete = async (id: number) => {
     if (id === 1) {
-      alert('No se puede eliminar el Cliente Genérico del sistema.');
+      showToast('error', 'No se puede eliminar el Cliente Genérico del sistema.');
       return;
     }
-    if (!confirm('¿Estás seguro de eliminar o desactivar este registro?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Eliminar tercero',
+      message: '¿Estás seguro de eliminar o desactivar este registro?',
+      confirmLabel: 'Eliminar',
+      destructive: true,
+    });
+    if (!confirmed) return;
 
     try {
       const res = await fetch(`/api/terceros?id=${id}`, { method: 'DELETE' });
@@ -141,10 +150,10 @@ export default function TercerosView({ isDarkMode = false }: TercerosViewProps) 
       if (data.success) {
         fetchTerceros();
       } else {
-        alert(data.message || 'Error al procesar la solicitud');
+        showToast('error', data.message || 'Error al procesar la solicitud');
       }
     } catch {
-      alert('Error de conexión con el servidor');
+      showToast('error', 'Error de conexión con el servidor');
     }
   };
 

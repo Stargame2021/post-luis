@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ToastProvider } from "@/components/ui/ToastProvider";
 
 export const metadata: Metadata = {
   title: "Sistema POS",
@@ -17,7 +18,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
       className="h-full antialiased"
     >
-      <body suppressHydrationWarning className="min-h-full flex flex-col font-sans">{children}</body>
+      <body suppressHydrationWarning className="min-h-full flex flex-col font-sans">
+        <ToastProvider>{children}</ToastProvider>
+      </body>
     </html>
   );
 }

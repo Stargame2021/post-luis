@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { Tasa, DashboardData, Usuario } from '@/types';
 import { hasTabPermission } from '@/lib/permissions';
+import { useToast } from '@/components/ui/ToastProvider';
 
 interface MainMenuViewProps {
   onNavigate: (tab: any, subTab?: 'ventas' | 'rentabilidad' | 'inventario') => void;
@@ -57,6 +58,7 @@ export default function MainMenuView({
   currentUser,
   storeName = 'Tienda Express',
 }: MainMenuViewProps) {
+  const { showToast } = useToast();
   const [currentPage, setCurrentPage] = useState<0 | 1 | 2 | 3>(0);
   const [viewMode, setViewMode] = useState<'slider' | 'grid'>('slider');
   
@@ -376,7 +378,7 @@ export default function MainMenuView({
         key={`${item.id}-${item.num}`}
         onClick={() => {
           if (!isAllowed) {
-            alert('No tienes permisos suficientes para acceder a este módulo.');
+            showToast('error', 'No tienes permisos suficientes para acceder a este módulo.');
             return;
           }
           if (item.customAction) {

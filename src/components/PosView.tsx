@@ -1,37 +1,52 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Producto, Tasa, Tercero, Presentacion, TipoPago, CondicionPago, CuentaBancaria } from '@/types';
+import { useState, useEffect, useCallback } from 'react';
+import { Producto, Tasa, Tercero, TipoPago, CondicionPago, CuentaBancaria, TipoOperacionPago } from '@/types';
 import { getOpcionesUnidad, getOpcionUnidad, formatStockDesglose } from '@/lib/unidades';
+import { usePosCart, type CartItem } from '@/hooks/usePosCart';
 import PosNumberInput from '@/components/PosNumberInput';
+import Dialog from '@/components/ui/Dialog';
 import {
   ShoppingCart,
   Plus,
   Minus,
   Trash2,
-  DollarSign,
   User,
   CheckCircle2,
   AlertCircle,
   Receipt,
   Search,
-  ArrowRight,
   Loader2,
   UserPlus,
-  AlertTriangle,
-  Layers,
-  Boxes,
   X,
 } from 'lucide-react';
 
-export interface CartItem {
-  id: string; // `${producto.id}-${presentacion_id ?? 'base'}`
-  producto: Producto;
-  presentacion_id: number | null;
+export type { CartItem };
+
+interface CompletedOrderLine {
+  lineId: string;
+  nombre: string;
   presentacion_nombre: string;
-  factor: number;
-  precio_unitario_usd: number;
   cantidad: number;
+  precio: number;
+  subtotal: number;
+  taxPct: number;
+}
+
+interface CompletedOrderReceipt {
+  id: number;
+  tasa_cambio_aplicada: number | string;
+  base_imponible_usd?: number | string;
+  monto_impuesto_usd?: number | string;
+  total_usd: number | string;
+  total_moneda_local: number | string;
+  condicion_pago: CondicionPago;
+  tipo_pago_nombre: string | null;
+  referencia_pago: string | null;
+  fecha_vencimiento: string | null;
+  cliente_nombre: string;
+  cliente_identificacion: string;
+  lineas: CompletedOrderLine[];
 }
 
 interface PosViewProps {
@@ -39,7 +54,14 @@ interface PosViewProps {
   currentRate: Tasa | null;
   onOrderCompleted: () => void;
   onOpenRates: () => void;
-  onNavigatePagos?: (actionData: any) => void;
+  onNavigatePagos?: (actionData: {
+    tipo_operacion: TipoOperacionPago;
+    pedido_id?: number;
+    compra_id?: number;
+    tercero_id?: number;
+    monto_original?: number;
+    moneda?: 'USD' | 'VES';
+  }) => void;
   isDarkMode?: boolean;
   storeName?: string;
 }
@@ -48,18 +70,17 @@ export default function PosView({
   products,
   currentRate,
   onOrderCompleted,
-  onOpenRates,
-  onNavigatePagos,
+  onNavigatePagos: _onNavigatePagos,
   isDarkMode = false,
   storeName = 'Tienda Express',
 }: PosViewProps) {
-  const [cart, setCart] = useState<CartItem[]>([]);
+  void _onNavigatePagos;
   const [clients, setClients] = useState<Tercero[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<number>(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [lastCompletedOrder, setLastCompletedOrder] = useState<any | null>(null);
+  const [lastCompletedOrder, setLastCompletedOrder] = useState<CompletedOrderReceipt | null>(null);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
@@ -96,6 +117,40 @@ export default function PosView({
 
   const rateValue = currentRate ? Number(currentRate.tasa) : 0;
 
+  const {
+    cart,
+    totals: {
+      baseImponibleUsd,
+      baseExentaUsd,
+      baseGravadaUsd,
+      montoImpuestoUsd,
+      totalUsd,
+      totalLocal,
+    },
+    makeLineId,
+    getCartBaseUnits,
+    addToCart: addItemToCart,
+    updateQuantity,
+    setDirectQuantity,
+    setProductLineQuantity,
+    changeItemPresentation,
+    removeFromCart,
+    clearCart,
+  } = usePosCart({
+    permitirStockNegativo,
+    rateValue,
+    onNotify: setNotification,
+  });
+
+  const addToCart = useCallback(
+    (product: Producto, presIdOverride?: number | null) => {
+      const presId =
+        presIdOverride !== undefined ? presIdOverride : (cardSelectedPres[product.id] ?? null);
+      addItemToCart(product, presId);
+    },
+    [addItemToCart, cardSelectedPres]
+  );
+
   // Filtrar cuentas o cajas según el tipo de pago seleccionado en el POS
   const posSelectedTp = tiposPago.find((t) => t.id === selectedTipoPagoId);
   const posIsEfectivo = posSelectedTp?.codigo?.startsWith('EFECTIVO');
@@ -125,287 +180,68 @@ export default function PosView({
     }
   };
 
-  // Load payment methods and bank accounts / cash drawers
-  const loadTiposPagoYCuentas = async () => {
-    try {
-      const [tpRes, cbRes] = await Promise.all([
-        fetch('/api/tipos-pago'),
-        fetch('/api/cuentas-bancarias'),
-      ]);
-      const tpData = await tpRes.json();
-      const cbData = await cbRes.json();
-      if (tpData.success && Array.isArray(tpData.tiposPago)) {
-        setTiposPago(tpData.tiposPago);
-        if (tpData.tiposPago.length > 0 && !selectedTipoPagoId) {
-          setSelectedTipoPagoId(tpData.tiposPago[0].id);
-        }
-      }
-      if (cbData.success && Array.isArray(cbData.cuentas)) {
-        setCuentasBancarias(cbData.cuentas);
-        if (cbData.cuentas.length > 0 && !selectedCuentaBancariaId) {
-          setSelectedCuentaBancariaId(cbData.cuentas[0].id);
-        }
-      }
-    } catch (e) {
-      console.error('Error cargando tipos de pago o cuentas bancarias:', e);
-    }
-  };
-
-  useEffect(() => {
-    loadTiposPagoYCuentas();
-  }, []);
-
-  // Load clients
-  const loadClients = async () => {
+  // Load payment methods, accounts, and clients
+  const loadClients = useCallback(async () => {
     try {
       const res = await fetch('/api/terceros?tipo=CLIENTE&active=true');
       const data = await res.json();
       if (data.success && data.terceros) {
         setClients(data.terceros);
-        if (!selectedClientId && data.terceros.length > 0) {
-          setSelectedClientId(data.terceros[0].id);
-        }
       }
     } catch (e) {
       console.error('Error fetching clients for POS:', e);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadClients();
+    let active = true;
+    const loadInitial = async () => {
+      try {
+        const [tpRes, cbRes, terRes] = await Promise.all([
+          fetch('/api/tipos-pago'),
+          fetch('/api/cuentas-bancarias'),
+          fetch('/api/terceros?tipo=CLIENTE&active=true'),
+        ]);
+        const [tpData, cbData, terData] = await Promise.all([
+          tpRes.json(),
+          cbRes.json(),
+          terRes.json(),
+        ]);
+        if (!active) return;
+
+        if (tpData.success && Array.isArray(tpData.tiposPago)) {
+          setTiposPago(tpData.tiposPago);
+          if (tpData.tiposPago.length > 0) {
+            setSelectedTipoPagoId((prev) => prev ?? tpData.tiposPago[0].id);
+          }
+        }
+        if (cbData.success && Array.isArray(cbData.cuentas)) {
+          setCuentasBancarias(cbData.cuentas);
+          if (cbData.cuentas.length > 0) {
+            setSelectedCuentaBancariaId((prev) => prev ?? cbData.cuentas[0].id);
+          }
+        }
+        if (terData.success && Array.isArray(terData.terceros)) {
+          setClients(terData.terceros);
+          if (terData.terceros.length > 0) {
+            setSelectedClientId((prev) => prev || terData.terceros[0].id);
+          }
+        }
+      } catch (e) {
+        console.error('Error cargando datos iniciales de POS:', e);
+      }
+    };
+
+    void loadInitial();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const activeProducts = products.filter((p) => p.activo);
   const filteredProducts = activeProducts.filter((p) =>
     p.nombre.toLowerCase().includes(searchTerm.toLowerCase())
   );
-
-  // Unidades base consumidas por un producto en el carrito (excluyendo una línea si se pasa)
-  const getCartBaseUnits = (productId: number, excludeLineId?: string): number => {
-    return cart
-      .filter((c) => c.producto.id === productId && c.id !== excludeLineId)
-      .reduce((sum, c) => sum + c.cantidad * c.factor, 0);
-  };
-
-  const makeLineId = (productId: number, presId: number | null): string => {
-    return `${productId}-${presId ?? 'base'}`;
-  };
-
-  // Agregar al carrito
-  const addToCart = (product: Producto, presIdOverride?: number | null) => {
-    const presId = presIdOverride !== undefined ? presIdOverride : (cardSelectedPres[product.id] ?? null);
-    const opcion = getOpcionUnidad(product, presId);
-    const lineId = makeLineId(product.id, opcion.id);
-
-    const stockTotal = Number(product.stock_actual) || 0;
-    const currentBaseUnits = getCartBaseUnits(product.id);
-    const neededBaseUnits = opcion.factor;
-
-    if (!permitirStockNegativo && currentBaseUnits + neededBaseUnits > stockTotal) {
-      const disponible = Math.max(0, stockTotal - currentBaseUnits);
-      setNotification({
-        type: 'error',
-        text: `Stock insuficiente para "${product.nombre}". Disponible: ${disponible} ${product.unidad_base || 'unidades'} base.`,
-      });
-      return;
-    }
-
-    setCart((prev) => {
-      const idx = prev.findIndex((item) => item.id === lineId);
-      if (idx !== -1) {
-        const copy = [...prev];
-        copy[idx] = { ...copy[idx], cantidad: copy[idx].cantidad + 1 };
-        return copy;
-      }
-      return [
-        ...prev,
-        {
-          id: lineId,
-          producto: product,
-          presentacion_id: opcion.id,
-          presentacion_nombre: opcion.nombre,
-          factor: opcion.factor,
-          precio_unitario_usd: opcion.precio_usd,
-          cantidad: 1,
-        },
-      ];
-    });
-  };
-
-  // Modificar cantidad (+1 o -1)
-  const updateQuantity = (lineId: string, delta: number) => {
-    const item = cart.find((c) => c.id === lineId);
-    if (!item) return;
-
-    if (delta > 0 && !permitirStockNegativo) {
-      const stockTotal = Number(item.producto.stock_actual) || 0;
-      const currentBaseOther = getCartBaseUnits(item.producto.id, lineId);
-      const newTotalBase = currentBaseOther + (item.cantidad + delta) * item.factor;
-      if (newTotalBase > stockTotal) {
-        setNotification({
-          type: 'error',
-          text: `No hay más stock disponible para "${item.producto.nombre}" en ${item.presentacion_nombre}.`,
-        });
-        return;
-      }
-    }
-
-    setCart((prev) =>
-      prev
-        .map((c) => {
-          if (c.id === lineId) {
-            const nextQty = c.cantidad + delta;
-            return nextQty > 0 ? { ...c, cantidad: nextQty } : null;
-          }
-          return c;
-        })
-        .filter(Boolean) as CartItem[]
-    );
-  };
-
-  // Escribir cantidad directa
-  const setDirectQuantity = (lineId: string, rawQty: number) => {
-    const item = cart.find((c) => c.id === lineId);
-    if (!item) return;
-
-    let targetQty = Math.max(0, Math.floor(rawQty));
-
-    if (!permitirStockNegativo) {
-      const stockTotal = Number(item.producto.stock_actual) || 0;
-      const currentBaseOther = getCartBaseUnits(item.producto.id, lineId);
-      const maxQty = Math.floor(Math.max(0, stockTotal - currentBaseOther) / item.factor);
-      if (targetQty > maxQty) {
-        targetQty = maxQty;
-        setNotification({
-          type: 'error',
-          text: `Máximo disponible para "${item.producto.nombre}" (${item.presentacion_nombre}): ${maxQty}.`,
-        });
-      }
-    }
-
-    setCart((prev) => {
-      if (targetQty <= 0) {
-        return prev.filter((c) => c.id !== lineId);
-      }
-      return prev.map((c) => (c.id === lineId ? { ...c, cantidad: targetQty } : c));
-    });
-  };
-
-  // Establecer cantidad directa de forma atómica (evita setTimeout en tarjetas)
-  const setProductLineQuantity = (product: Producto, presId: number | null, rawQty: number) => {
-    const opcion = getOpcionUnidad(product, presId);
-    const lineId = makeLineId(product.id, opcion.id);
-    let targetQty = Math.max(0, Math.floor(rawQty));
-
-    if (!permitirStockNegativo && targetQty > 0) {
-      const stockTotal = Number(product.stock_actual) || 0;
-      const otherBase = getCartBaseUnits(product.id, lineId);
-      const maxQty = Math.floor(Math.max(0, stockTotal - otherBase) / opcion.factor);
-      if (targetQty > maxQty) {
-        targetQty = maxQty;
-        setNotification({
-          type: 'error',
-          text: `Máximo disponible para "${product.nombre}" (${opcion.nombre}): ${maxQty}.`,
-        });
-      }
-    }
-
-    setCart((prev) => {
-      if (targetQty <= 0) {
-        return prev.filter((c) => c.id !== lineId);
-      }
-      const exists = prev.some((c) => c.id === lineId);
-      if (exists) {
-        return prev.map((c) => (c.id === lineId ? { ...c, cantidad: targetQty } : c));
-      }
-      return [
-        ...prev,
-        {
-          id: lineId,
-          producto: product,
-          presentacion_id: opcion.id,
-          presentacion_nombre: opcion.nombre,
-          factor: opcion.factor,
-          precio_unitario_usd: opcion.precio_usd,
-          cantidad: targetQty,
-        },
-      ];
-    });
-  };
-
-  // Cambiar presentación de una línea en el carrito
-  const changeItemPresentation = (lineId: string, newPresId: number | null) => {
-    const item = cart.find((c) => c.id === lineId);
-    if (!item) return;
-
-    const nuevaOpcion = getOpcionUnidad(item.producto, newPresId);
-    const newLineId = makeLineId(item.producto.id, nuevaOpcion.id);
-
-    // Si ya existe otra línea con esa presentación, las fusionamos
-    const existing = cart.find((c) => c.id === newLineId && c.id !== lineId);
-    const mergedQty = (existing ? existing.cantidad : 0) + item.cantidad;
-
-    if (!permitirStockNegativo) {
-      const stockTotal = Number(item.producto.stock_actual) || 0;
-      const otherBase = getCartBaseUnits(item.producto.id, lineId);
-      const neededBase = mergedQty * nuevaOpcion.factor;
-      if (otherBase + neededBase > stockTotal) {
-        setNotification({
-          type: 'error',
-          text: `Stock insuficiente para cambiar a ${nuevaOpcion.nombre}.`,
-        });
-        return;
-      }
-    }
-
-    setCart((prev) => {
-      const filtered = prev.filter((c) => c.id !== lineId && c.id !== newLineId);
-      return [
-        ...filtered,
-        {
-          id: newLineId,
-          producto: item.producto,
-          presentacion_id: nuevaOpcion.id,
-          presentacion_nombre: nuevaOpcion.nombre,
-          factor: nuevaOpcion.factor,
-          precio_unitario_usd: nuevaOpcion.precio_usd,
-          cantidad: mergedQty,
-        },
-      ];
-    });
-  };
-
-  const removeFromCart = (lineId: string) => {
-    setCart((prev) => prev.filter((item) => item.id !== lineId));
-  };
-
-  const clearCart = () => {
-    setCart([]);
-  };
-
-  // Cálculos con discriminación exacta de IVA y productos exentos
-  let baseImponibleUsd = 0;
-  let baseExentaUsd = 0;
-  let baseGravadaUsd = 0;
-  let montoImpuestoUsd = 0;
-
-  cart.forEach((item) => {
-    const itemSubtotal = item.precio_unitario_usd * item.cantidad;
-    const rawTax = item.producto.impuesto_porcentaje;
-    const taxPercent = rawTax !== undefined && rawTax !== null ? Number(rawTax) : 16.0;
-    const itemTax = (itemSubtotal * taxPercent) / 100;
-
-    baseImponibleUsd += itemSubtotal;
-    if (taxPercent === 0) {
-      baseExentaUsd += itemSubtotal;
-    } else {
-      baseGravadaUsd += itemSubtotal;
-    }
-    montoImpuestoUsd += itemTax;
-  });
-
-  const totalUsd = baseImponibleUsd + montoImpuestoUsd;
-  const totalLocal = rateValue > 0 ? totalUsd * rateValue : 0;
 
   const selectedClient = clients.find((c) => c.id === selectedClientId);
 
@@ -506,6 +342,7 @@ export default function PosView({
             const taxPct = rawTax !== undefined && rawTax !== null ? Number(rawTax) : 16.0;
             const sub = c.precio_unitario_usd * c.cantidad;
             return {
+              lineId: c.id,
               nombre: c.presentacion_id ? `${c.producto.nombre} (${c.presentacion_nombre})` : c.producto.nombre,
               presentacion_nombre: c.presentacion_nombre,
               cantidad: c.cantidad,
@@ -1126,89 +963,94 @@ export default function PosView({
       </div>
 
       {/* Quick Client Modal */}
-      {showQuickClientModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-150">
-          <div
-            className={`w-full max-w-md rounded-2xl border shadow-2xl p-6 transition-all ${isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
-              }`}
-          >
-            <h3 className="text-base font-bold mb-3 flex items-center gap-2">
-              <UserPlus className="w-4 h-4 text-indigo-500" />
-              Nuevo Cliente Rápido
-            </h3>
-            <form onSubmit={handleCreateQuickClient} className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold mb-1">Cédula / RIF *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: V-12345678"
-                  value={quickClientData.identificacion}
-                  onChange={(e) => setQuickClientData({ ...quickClientData, identificacion: e.target.value })}
-                  className={`w-full px-3 py-2 rounded-xl border text-sm uppercase ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
-                    }`}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold mb-1">Nombre o Razón Social *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: María Rodríguez"
-                  value={quickClientData.razon_social_nombre}
-                  onChange={(e) => setQuickClientData({ ...quickClientData, razon_social_nombre: e.target.value })}
-                  className={`w-full px-3 py-2 rounded-xl border text-sm ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
-                    }`}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold mb-1">Teléfono</label>
-                <input
-                  type="text"
-                  placeholder="Ej: 0412-1234567"
-                  value={quickClientData.telefono}
-                  onChange={(e) => setQuickClientData({ ...quickClientData, telefono: e.target.value })}
-                  className={`w-full px-3 py-2 rounded-xl border text-sm ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
-                    }`}
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowQuickClientModal(false)}
-                  className="px-3 py-1.5 text-xs rounded-lg border"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-500"
-                >
-                  Guardar y Seleccionar
-                </button>
-              </div>
-            </form>
-          </div>
+      <Dialog
+        open={showQuickClientModal}
+        onClose={() => setShowQuickClientModal(false)}
+        titleId="quick-client-modal-title"
+        maxWidthClass="max-w-md"
+        isDarkMode={isDarkMode}
+      >
+        <div className="p-6">
+          <h3 id="quick-client-modal-title" className="text-base font-bold mb-3 flex items-center gap-2">
+            <UserPlus className="w-4 h-4 text-indigo-500" />
+            Nuevo Cliente Rápido
+          </h3>
+          <form onSubmit={handleCreateQuickClient} className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold mb-1">Cédula / RIF *</label>
+              <input
+                type="text"
+                required
+                placeholder="Ej: V-12345678"
+                value={quickClientData.identificacion}
+                onChange={(e) => setQuickClientData({ ...quickClientData, identificacion: e.target.value })}
+                className={`w-full px-3 py-2 rounded-xl border text-sm uppercase ${
+                  isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+                }`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Nombre o Razón Social *</label>
+              <input
+                type="text"
+                required
+                placeholder="Ej: María Rodríguez"
+                value={quickClientData.razon_social_nombre}
+                onChange={(e) =>
+                  setQuickClientData({ ...quickClientData, razon_social_nombre: e.target.value })
+                }
+                className={`w-full px-3 py-2 rounded-xl border text-sm ${
+                  isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+                }`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Teléfono</label>
+              <input
+                type="text"
+                placeholder="Ej: 0412-1234567"
+                value={quickClientData.telefono}
+                onChange={(e) => setQuickClientData({ ...quickClientData, telefono: e.target.value })}
+                className={`w-full px-3 py-2 rounded-xl border text-sm ${
+                  isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+                }`}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowQuickClientModal(false)}
+                className="px-3 py-1.5 text-xs rounded-lg border"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-500"
+              >
+                Guardar y Seleccionar
+              </button>
+            </div>
+          </form>
         </div>
-      )}
+      </Dialog>
 
       {/* Modal de Cobro: Confirmación previa (evita errores de dedo) y Recibo final */}
-      {(showCheckoutModal || lastCompletedOrder) && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in"
-          onClick={() => {
-            if (!loading) {
-              setShowCheckoutModal(false);
-              setLastCompletedOrder(null);
-              setCheckoutError(null);
-            }
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className={`border rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-2xl space-y-4 my-auto max-h-[92vh] overflow-y-auto ${isDarkMode ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
-              }`}
-          >
+      <Dialog
+        open={Boolean(showCheckoutModal || lastCompletedOrder)}
+        onClose={() => {
+          if (!loading) {
+            setShowCheckoutModal(false);
+            setLastCompletedOrder(null);
+            setCheckoutError(null);
+          }
+        }}
+        closeOnBackdrop={!loading}
+        ariaLabel={lastCompletedOrder ? 'Comprobante de venta' : 'Confirmar venta y cobro'}
+        maxWidthClass="max-w-lg"
+        isDarkMode={isDarkMode}
+      >
+        <div className="p-5 sm:p-6 space-y-4">
             {lastCompletedOrder ? (
               /* FASE 2: Recibo de Venta Exitosa (Pedido registrado e inventario descontado) */
               <>
@@ -1255,8 +1097,8 @@ export default function PosView({
                     className={`border-t pt-2 space-y-1 max-h-40 overflow-y-auto pr-1 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'
                       }`}
                   >
-                    {lastCompletedOrder.lineas?.map((l: any, i: number) => (
-                      <div key={i} className="flex justify-between text-[11px]">
+                    {lastCompletedOrder.lineas?.map((l) => (
+                      <div key={l.lineId} className="flex justify-between text-[11px]">
                         <span className={isDarkMode ? 'text-slate-300' : 'text-slate-700'}>
                           {l.cantidad}x {l.nombre}
                         </span>
@@ -1409,8 +1251,8 @@ export default function PosView({
                     className={`border-t pt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'
                       }`}
                   >
-                    {cart.map((c, i) => (
-                      <div key={i} className="flex justify-between items-center text-[11px]">
+                    {cart.map((c) => (
+                      <div key={c.id} className="flex justify-between items-center text-[11px]">
                         <span className={`truncate max-w-[190px] ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
                           {c.cantidad}x {c.presentacion_id ? `${c.producto.nombre} (${c.presentacion_nombre})` : c.producto.nombre}
                         </span>
@@ -1722,9 +1564,8 @@ export default function PosView({
                 </div>
               </>
             )}
-          </div>
         </div>
-      )}
+      </Dialog>
     </div>
   );
 }
