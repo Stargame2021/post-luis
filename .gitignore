@@ -46,3 +46,6 @@ next-env.d.ts
 !/backups/README.md
 !/backups/.gitkeep
 
+# auth session secret fallback
+.auth-secret
+
