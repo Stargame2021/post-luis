@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Impuesto } from '@/types';
 import PosNumberInput from '@/components/PosNumberInput';
+import { useConfirm, useToast } from '@/components/ui/ToastProvider';
 import {
   Percent,
   Plus,
@@ -20,6 +21,8 @@ interface ImpuestosViewProps {
 }
 
 export default function ImpuestosView({ isDarkMode = false, onRefresh }: ImpuestosViewProps) {
+  const { showToast } = useToast();
+  const confirmDialog = useConfirm();
   const [taxes, setTaxes] = useState<Impuesto[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -104,10 +107,16 @@ export default function ImpuestosView({ isDarkMode = false, onRefresh }: Impuest
 
   const handleDelete = async (id: number) => {
     if (id === 1 || id === 2) {
-      alert('Los impuestos base del sistema (IVA 16% y Exento) no pueden eliminarse.');
+      showToast('error', 'Los impuestos base del sistema (IVA 16% y Exento) no pueden eliminarse.');
       return;
     }
-    if (!confirm('¿Estás seguro de eliminar o desactivar esta alícuota de impuesto?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Eliminar impuesto',
+      message: '¿Estás seguro de eliminar o desactivar esta alícuota de impuesto?',
+      confirmLabel: 'Eliminar',
+      destructive: true,
+    });
+    if (!confirmed) return;
 
     try {
       const res = await fetch(`/api/impuestos?id=${id}`, { method: 'DELETE' });
@@ -116,10 +125,10 @@ export default function ImpuestosView({ isDarkMode = false, onRefresh }: Impuest
         fetchTaxes();
         if (onRefresh) onRefresh();
       } else {
-        alert(data.message || 'Error al eliminar');
+        showToast('error', data.message || 'Error al eliminar');
       }
     } catch {
-      alert('Error de conexión con el servidor');
+      showToast('error', 'Error de conexión con el servidor');
     }
   };
 

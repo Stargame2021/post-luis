@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Compra, Producto, Tercero, Impuesto, Tasa, EstadoCompra, TipoPago, CondicionPago } from '@/types';
 import { getOpcionesUnidad, formatStockDesglose } from '@/lib/unidades';
 import PosNumberInput from '@/components/PosNumberInput';
+import { useConfirm, useToast } from '@/components/ui/ToastProvider';
 import {
   FileText,
   Plus,
@@ -207,6 +208,8 @@ export default function ComprasView({
   onNavigatePagos,
   isDarkMode = false,
 }: ComprasViewProps) {
+  const { showToast } = useToast();
+  const confirmDialog = useConfirm();
   const [compras, setCompras] = useState<Compra[]>([]);
   const [suppliers, setSuppliers] = useState<Tercero[]>([]);
   const [taxes, setTaxes] = useState<Impuesto[]>([]);
@@ -516,7 +519,7 @@ export default function ComprasView({
   };
 
   // Change status of existing purchase
-  const handleUpdateStatus = (compra: Compra, newEstado: EstadoCompra) => {
+  const handleUpdateStatus = async (compra: Compra, newEstado: EstadoCompra) => {
     if (newEstado === 'ANULADO') {
       // Abre modal detallada de anulación
       setAnularModalCompra(compra);
@@ -528,8 +531,13 @@ export default function ComprasView({
         ? `¿Confirmas pasar la compra #${compra.id} a COMPLETO? Esto sumará los productos al inventario.`
         : `¿Confirmas pasar la compra #${compra.id} a PROCESO?`;
 
-    if (!confirm(confirmMsg)) return;
-    executeStatusChange(compra.id, newEstado);
+    const confirmed = await confirmDialog({
+      title: 'Cambiar estado de compra',
+      message: confirmMsg,
+      confirmLabel: 'Confirmar cambio',
+    });
+    if (!confirmed) return;
+    await executeStatusChange(compra.id, newEstado);
   };
 
   const executeStatusChange = async (compraId: number, newEstado: EstadoCompra) => {
@@ -549,10 +557,10 @@ export default function ComprasView({
           setSelectedCompra({ ...selectedCompra, estado: newEstado });
         }
       } else {
-        alert(data.message || 'Error al cambiar estado');
+        showToast('error', data.message || 'Error al cambiar estado');
       }
     } catch {
-      alert('Error de conexión con el servidor');
+      showToast('error', 'Error de conexión con el servidor');
     } finally {
       setChangingStatusId(null);
     }
@@ -562,7 +570,7 @@ export default function ComprasView({
   const handleQuickSupplierSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickSupplierData.identificacion.trim() || !quickSupplierData.razon_social_nombre.trim()) {
-      alert('Identificación y Razón Social son requeridos');
+      showToast('error', 'Identificación y Razón Social son requeridos');
       return;
     }
 
@@ -586,10 +594,10 @@ export default function ComprasView({
         setShowQuickSupplierModal(false);
         setQuickSupplierData({ identificacion: '', razon_social_nombre: '', telefono: '' });
       } else {
-        alert(data.message || 'Error al crear proveedor');
+        showToast('error', data.message || 'Error al crear proveedor');
       }
     } catch {
-      alert('Error de conexión con el servidor');
+      showToast('error', 'Error de conexión con el servidor');
     }
   };
 

@@ -375,14 +375,14 @@ describe('4. Identidad de tienda configurable (/api/empresa) y fixes UI estátic
     expect(qrSrc).not.toContain('192.168.1.7');
     expect(qrSrc).toContain("execCommand('copy')");
 
-    const repSrc = fs.readFileSync(
-      path.join(ROOT_DIR, 'src', 'components', 'ReportesView.tsx'),
+    const repExportSrc = fs.readFileSync(
+      path.join(ROOT_DIR, 'src', 'lib', 'export-reportes.ts'),
       'utf-8'
     );
-    expect(repSrc).toContain('res.cantidadPedidos');
-    expect(repSrc).toContain('rFifo.totalIngresosUsd');
-    expect(repSrc).toContain('invSum.valorTotalCostoUsd');
-    expect(repSrc).toContain('new Blob(');
-    expect(repSrc).not.toContain("encodeURI('data:text/csv");
+    expect(repExportSrc).toContain('res.cantidadPedidos');
+    expect(repExportSrc).toContain('rFifo.totalIngresosUsd');
+    expect(repExportSrc).toContain('invSum.valorTotalCostoUsd');
+    expect(repExportSrc).toContain('new Blob(');
+    expect(repExportSrc).not.toContain("encodeURI('data:text/csv");
   });
 });

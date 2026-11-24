@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Pago, TipoPago, CuentaBancaria, Tercero, TipoOperacionPago, DocumentoPendiente } from '@/types';
 import PosNumberInput from '@/components/PosNumberInput';
+import { useConfirm } from '@/components/ui/ToastProvider';
 
 interface PagosViewProps {
   isDarkMode?: boolean;
@@ -41,6 +42,7 @@ interface PagosViewProps {
 }
 
 export default function PagosView({ isDarkMode = false, initialAction = null }: PagosViewProps) {
+  const confirmDialog = useConfirm();
   const [pagos, setPagos] = useState<Pago[]>([]);
   const [tiposPago, setTiposPago] = useState<TipoPago[]>([]);
   const [cuentas, setCuentas] = useState<CuentaBancaria[]>([]);
@@ -302,13 +304,13 @@ export default function PagosView({ isDarkMode = false, initialAction = null }: 
 
   const handleVoidPago = async (p: Pago) => {
     if (p.estado === 'ANULADO') return;
-    if (
-      !confirm(
-        `¿Confirmas anular el pago #${p.id}? Esto revertirá el movimiento de saldo en la cuenta bancaria asociada.`
-      )
-    ) {
-      return;
-    }
+    const confirmed = await confirmDialog({
+      title: 'Anular pago',
+      message: `¿Confirmas anular el pago #${p.id}? Esto revertirá el movimiento de saldo en la cuenta bancaria asociada.`,
+      confirmLabel: 'Anular pago',
+      destructive: true,
+    });
+    if (!confirmed) return;
 
     setVoidingId(p.id);
     setActionError(null);

@@ -1,45 +1,12 @@
-const https = require('https');
 const cheerio = require('cheerio');
 const { Client } = require('pg');
 const fs = require('fs');
 const path = require('path');
-
-const MONTHS_ES = {
-  enero: '01',
-  febrero: '02',
-  marzo: '03',
-  abril: '04',
-  mayo: '05',
-  junio: '06',
-  julio: '07',
-  agosto: '08',
-  septiembre: '09',
-  setiembre: '09',
-  octubre: '10',
-  noviembre: '11',
-  diciembre: '12',
-};
-
-const TLS_CHAIN_ERRORS = new Set([
-  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  'CERT_HAS_EXPIRED',
-  'SELF_SIGNED_CERT_IN_CHAIN',
-  'DEPTH_ZERO_SELF_SIGNED_CERT',
-  'ERR_TLS_CERT_ALTNAME_INVALID',
-]);
-
-function getCaracasDateString(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Caracas',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const year = (parts.find((p) => p.type === 'year') || {}).value || '1970';
-  const month = (parts.find((p) => p.type === 'month') || {}).value || '01';
-  const day = (parts.find((p) => p.type === 'day') || {}).value || '01';
-  return `${year}-${month}-${day}`;
-}
+const {
+  getCaracasDateString,
+  parseBcvDateFromHtml,
+  fetchBcvHtmlSafe,
+} = require('./lib/bcv-core.cjs');
 
 // Leer configuración desde DB_CONFIG_PATH, .dbconfig.json, .env o variables de entorno
 function getDbConfig() {
@@ -85,86 +52,12 @@ function getDbConfig() {
   };
 }
 
-// Descargar HTML del BCV (intenta TLS estricto primero; si falla por cadena de certificado, reintenta)
-function requestBcvHtml(rejectUnauthorized) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'www.bcv.org.ve',
-      port: 443,
-      path: '/',
-      method: 'GET',
-      rejectUnauthorized,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-      },
-      timeout: 25000,
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      res.on('end', () => {
-        resolve(data);
-      });
-    });
-
-    req.on('error', (err) => reject(err));
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Timeout al conectar con www.bcv.org.ve'));
-    });
-
-    req.end();
-  });
-}
-
-async function fetchBcvHtml() {
-  try {
-    return await requestBcvHtml(true);
-  } catch (err) {
-    if (err && TLS_CHAIN_ERRORS.has(err.code)) {
-      console.warn(`⚠️ Error de cadena TLS en BCV (${err.code}); reintentando sin validación estricta.`);
-      return await requestBcvHtml(false);
-    }
-    throw err;
-  }
-}
-
-// Parsea fecha de BCV (content="YYYY-MM-DDTHH:mm:ss" o texto en español)
-function parseBcvDate($) {
-  const contentDate =
-    $('span.date-display-single').attr('content') ||
-    $('.pull-right.dinpro span.date-display-single').attr('content');
-  if (contentDate) {
-    const match = contentDate.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (match) return match[1];
-  }
-
-  const dateText =
-    $('.diname-round .date-display-single').text().trim() ||
-    $('span.date-display-single').first().text().trim();
-  if (dateText) {
-    const match = dateText.match(/(\d{1,2})\s+([a-zA-Záéíóúñ]+)\s+(\d{4})/i);
-    if (match) {
-      const month = MONTHS_ES[match[2].toLowerCase()];
-      if (month) return `${match[3]}-${month}-${match[1].padStart(2, '0')}`;
-    }
-  }
-
-  // Fallback a la fecha de Venezuela (America/Caracas)
-  return getCaracasDateString();
-}
-
 async function scrapeAndSaveBcv() {
-  console.log(`[${new Date().toISOString()}] 🔄 Consultando www.bcv.org.ve...`);
+  console.log(`[${getCaracasDateString()} | ${new Date().toISOString()}] 🔄 Consultando www.bcv.org.ve...`);
 
   let html;
   try {
-    html = await fetchBcvHtml();
+    html = await fetchBcvHtmlSafe(25000);
   } catch (error) {
     console.error('❌ Error al conectar con el BCV:', error.message);
     throw error;
@@ -192,7 +85,7 @@ async function scrapeAndSaveBcv() {
   const tasaRedondeada = Number(numericValue.toFixed(4));
 
   // 2. Extraer la Fecha Valor oficial del BCV
-  const fechaValor = parseBcvDate($);
+  const fechaValor = parseBcvDateFromHtml($);
   console.log(`📥 BCV Tasa: ${tasaRedondeada} | Fecha Valor oficial: ${fechaValor}`);
 
   // 3. Conectar a PostgreSQL

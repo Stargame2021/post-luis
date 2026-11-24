@@ -5,6 +5,7 @@ import { Producto, Impuesto, Presentacion } from '@/types';
 import { formatStockDesglose, formatStockDesgloseCompleto, getOpcionesUnidad, getSegmentacionExistencias } from '@/lib/unidades';
 import { calculateBaseFromFinalPrice } from '@/lib/excel-import';
 import PosNumberInput from '@/components/PosNumberInput';
+import { useConfirm, useToast } from '@/components/ui/ToastProvider';
 import {
   Package,
   Plus,
@@ -37,6 +38,8 @@ interface PresFormItem {
 }
 
 export default function ProductsView({ products, onRefresh, onNavigateImportExcel, isDarkMode = false }: ProductsViewProps) {
+  const { showToast } = useToast();
+  const confirmDialog = useConfirm();
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Producto | null>(null);
@@ -215,7 +218,13 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('¿Estás seguro de eliminar o desactivar este producto?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Eliminar producto',
+      message: '¿Estás seguro de eliminar o desactivar este producto?',
+      confirmLabel: 'Eliminar',
+      destructive: true,
+    });
+    if (!confirmed) return;
 
     try {
       const res = await fetch(`/api/productos?id=${id}`, { method: 'DELETE' });
@@ -223,10 +232,10 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
       if (data.success) {
         onRefresh();
       } else {
-        alert(data.message || 'Error al eliminar');
+        showToast('error', data.message || 'Error al eliminar');
       }
     } catch {
-      alert('Error al comunicarse con el servidor');
+      showToast('error', 'Error al comunicarse con el servidor');
     }
   };
 

@@ -18,6 +18,7 @@ import {
   Check,
 } from 'lucide-react';
 import { Usuario, Rol, ModuloPermiso } from '@/types';
+import { useConfirm } from '@/components/ui/ToastProvider';
 
 const MODULOS_DISPONIBLES: { id: ModuloPermiso; label: string; desc: string }[] = [
   { id: 'pos', label: 'Punto de Venta (POS)', desc: 'Facturación y cobro directo' },
@@ -44,6 +45,7 @@ export default function UsuariosView({
   isDarkMode?: boolean;
   currentUser?: Usuario | null;
 }) {
+  const confirmDialog = useConfirm();
   const [activeSubTab, setActiveSubTab] = useState<'usuarios' | 'roles'>('usuarios');
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [roles, setRoles] = useState<Rol[]>([]);
@@ -167,7 +169,13 @@ export default function UsuariosView({
 
   // Eliminar usuario
   const handleDeleteUser = async (id: number) => {
-    if (!confirm('¿Estás seguro de eliminar este usuario?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Eliminar usuario',
+      message: '¿Estás seguro de eliminar este usuario?',
+      confirmLabel: 'Eliminar',
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       const res = await fetch(`/api/usuarios?id=${id}`, { method: 'DELETE' });
       const data = await res.json();
