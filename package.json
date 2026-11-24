@@ -7,6 +7,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "lint:core": "eslint src/lib src/services src/hooks src/components/ui src/components/reportes src/components/ReportesView.tsx src/components/PosView.tsx src/app/page.tsx src/app/layout.tsx src/app/api/reportes/route.ts src/app/api/empresa/route.ts src/app/api/tasa/sync/route.ts src/app/api/productos/route.ts src/app/api/productos/import/route.ts src/app/api/dashboard/route.ts src/proxy.ts tests",
+    "typecheck": "tsc --noEmit",
     "bcv": "node scrape-bcv.js",
     "test": "vitest run",
     "test:watch": "vitest"
