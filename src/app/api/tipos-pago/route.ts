@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { query, ensureAuthTables } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET: Listar tipos de pago activos
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['pos', 'compras', 'pagos', 'orders', 'bancos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const rows = await query(

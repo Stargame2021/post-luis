@@ -98,6 +98,7 @@ export default function MantenimientoModal({
           action: selectedAction,
           resetStock,
           newStockValue: Number(newStockValue) || 0,
+          confirmPhrase: confirmPhrase.trim(),
         }),
       });
 

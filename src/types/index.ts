@@ -298,9 +298,11 @@ export type ModuloPermiso =
   | 'price_list'
   | 'orders'
   | 'compras'
+  | 'pagos'
   | 'products'
   | 'import_excel'
   | 'terceros'
+  | 'bancos'
   | 'rates'
   | 'impuestos'
   | 'reports'
@@ -327,6 +329,7 @@ export interface Usuario {
   rol_nombre?: string;
   permisos?: ModuloPermiso[];
   activo: boolean;
+  must_change_password?: boolean;
   ultimo_acceso?: string | null;
   creado_en?: string;
 }

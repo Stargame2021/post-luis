@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { query, ensureAuthTables } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET: Consultar facturas/pedidos y compras pendientes de cobro o pago
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['pagos', 'pos', 'compras', 'orders'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const { searchParams } = new URL(req.url);

@@ -1,6 +1,7 @@
 import { Pool, PoolConfig } from 'pg';
 import fs from 'fs';
 import path from 'path';
+import { DEFAULT_SEED_PASSWORD, hashPassword } from './auth';
 
 export interface DbConfig {
   host: string;
@@ -14,7 +15,7 @@ export interface DbConfig {
 const CONFIG_FILE_PATH = path.join(process.cwd(), '.dbconfig.json');
 
 // Parse .env directly if process.env hasn't loaded it yet or has indentations
-function parseEnvFile(): Record<string, string> {
+export function parseEnvFile(): Record<string, string> {
   const envPath = path.join(process.cwd(), '.env');
   const result: Record<string, string> = {};
   if (fs.existsSync(envPath)) {
@@ -104,6 +105,8 @@ export function getPool(customConfig?: DbConfig): Pool {
 }
 
 export function resetPool(): void {
+  authTablesChecked = false;
+  authTablesPromise = null;
   if (poolInstance) {
     poolInstance.end().catch(() => {});
     poolInstance = null;
@@ -118,11 +121,15 @@ export async function query<T = any>(text: string, params?: any[]): Promise<T[]>
 
 // Asegurar que las tablas de roles, usuarios, tipos y términos de pago existan automáticamente
 let authTablesChecked = false;
+let authTablesPromise: Promise<void> | null = null;
 export async function ensureAuthTables(): Promise<void> {
   if (authTablesChecked) return;
-  try {
-    const pool = getPool();
-    await pool.query(`
+  if (authTablesPromise) return authTablesPromise;
+
+  authTablesPromise = (async () => {
+    try {
+      const pool = getPool();
+      await pool.query(`
       CREATE TABLE IF NOT EXISTS m_rol (
         id SERIAL PRIMARY KEY,
         nombre VARCHAR(50) NOT NULL UNIQUE,
@@ -277,24 +284,48 @@ export async function ensureAuthTables(): Promise<void> {
       UPDATE t_compra SET tipo_pago_id = 1 WHERE tipo_pago_id IS NULL;
 
       INSERT INTO m_rol (id, nombre, descripcion, permisos, activo) VALUES
-      (1, 'ADMINISTRADOR', 'Acceso completo a todos los módulos y configuraciones del sistema', '["pos", "orders", "compras", "products", "terceros", "rates", "impuestos", "reports", "reports_profit", "users", "maintenance"]'::jsonb, true),
-      (2, 'SUPERVISOR', 'Acceso a ventas, compras, productos, clientes y reportes operativos', '["pos", "orders", "compras", "products", "terceros", "rates", "reports"]'::jsonb, true),
-      (3, 'CAJERO', 'Acceso exclusivo para facturación en Punto de Venta y consulta de tasa', '["pos", "orders", "rates"]'::jsonb, true),
-      (4, 'ALMACEN', 'Acceso a inventario, productos, proveedores y recepción de compras', '["products", "compras", "terceros"]'::jsonb, true)
+      (1, 'ADMINISTRADOR', 'Acceso completo a todos los módulos y configuraciones del sistema', '["pos", "price_list", "orders", "compras", "pagos", "products", "import_excel", "terceros", "bancos", "rates", "impuestos", "reports", "reports_profit", "users", "maintenance"]'::jsonb, true),
+      (2, 'SUPERVISOR', 'Acceso a ventas, compras, productos, clientes y reportes operativos', '["pos", "price_list", "orders", "compras", "pagos", "products", "terceros", "bancos", "rates", "reports"]'::jsonb, true),
+      (3, 'CAJERO', 'Acceso exclusivo para facturación en Punto de Venta y consulta de tasa', '["pos", "price_list", "orders", "rates"]'::jsonb, true),
+      (4, 'ALMACEN', 'Acceso a inventario, productos, proveedores y recepción de compras', '["products", "import_excel", "compras", "terceros"]'::jsonb, true)
       ON CONFLICT (id) DO NOTHING;
+
+      UPDATE m_rol
+      SET permisos = permisos || (
+        SELECT COALESCE(jsonb_agg(to_jsonb(p)), '[]'::jsonb)
+        FROM unnest(ARRAY['price_list', 'import_excel', 'pagos', 'bancos']) AS p
+        WHERE NOT (permisos @> jsonb_build_array(p))
+      )
+      WHERE id = 1
+        AND jsonb_typeof(permisos) = 'array'
+        AND NOT (permisos @> '["price_list", "import_excel", "pagos", "bancos"]'::jsonb);
 
       SELECT setval('m_rol_id_seq', COALESCE((SELECT MAX(id) FROM m_rol), 4));
-
-      INSERT INTO m_usuario (id, username, password_hash, nombre_completo, email, rol_id, activo) VALUES
-      (1, 'admin', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'Administrador del Sistema', 'admin@tiendaexpress.com', 1, true),
-      (2, 'cajero', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'Cajero Principal', 'cajero@tiendaexpress.com', 3, true)
-      ON CONFLICT (id) DO NOTHING;
-
-      SELECT setval('m_usuario_id_seq', COALESCE((SELECT MAX(id) FROM m_usuario), 2));
     `);
-    authTablesChecked = true;
-  } catch (err) {
-    console.warn('Advertencia al verificar tablas del sistema:', err);
-  }
+
+      const adminDefaultHash = hashPassword(DEFAULT_SEED_PASSWORD);
+      const cajeroDefaultHash = hashPassword(DEFAULT_SEED_PASSWORD);
+
+      await pool.query(
+        `INSERT INTO m_usuario (id, username, password_hash, nombre_completo, email, rol_id, activo) VALUES
+         (1, 'admin', $1, 'Administrador del Sistema', 'admin@tiendaexpress.com', 1, true),
+         (2, 'cajero', $2, 'Cajero Principal', 'cajero@tiendaexpress.com', 3, true)
+         ON CONFLICT (id) DO NOTHING`,
+        [adminDefaultHash, cajeroDefaultHash]
+      );
+
+      await pool.query(
+        `SELECT setval('m_usuario_id_seq', COALESCE((SELECT MAX(id) FROM m_usuario), 2))`
+      );
+
+      authTablesChecked = true;
+    } catch (err) {
+      console.warn('Advertencia al verificar tablas del sistema:', err);
+    } finally {
+      authTablesPromise = null;
+    }
+  })();
+
+  return authTablesPromise;
 }
 

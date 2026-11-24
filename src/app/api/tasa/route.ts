@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET latest rate or rate for a specific date
 export async function GET(req: Request) {
+  const auth = await requireAuth(req);
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const dateParam = searchParams.get('fecha'); // YYYY-MM-DD
@@ -40,6 +44,9 @@ export async function GET(req: Request) {
 
 // POST register or update rate for a specific date
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['rates'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
     let { fecha, tasa } = body;

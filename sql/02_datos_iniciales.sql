@@ -22,13 +22,23 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('m_tercero_id_seq', COALESCE((SELECT MAX(id) FROM m_tercero), 2));
 
 -- 3. Roles del Sistema
--- Permisos: pos, orders, compras, products, terceros, rates, impuestos, reports, reports_profit, users, maintenance
+-- Permisos: pos, price_list, orders, compras, pagos, products, import_excel, terceros, bancos, rates, impuestos, reports, reports_profit, users, maintenance
 INSERT INTO m_rol (id, nombre, descripcion, permisos, activo) VALUES
-(1, 'ADMINISTRADOR', 'Acceso completo a todos los módulos y configuraciones del sistema', '["pos", "orders", "compras", "products", "terceros", "rates", "impuestos", "reports", "reports_profit", "users", "maintenance"]'::jsonb, true),
-(2, 'SUPERVISOR', 'Acceso a ventas, compras, productos, clientes y reportes operativos', '["pos", "orders", "compras", "products", "terceros", "rates", "reports"]'::jsonb, true),
-(3, 'CAJERO', 'Acceso exclusivo para facturación en Punto de Venta y consulta de tasa', '["pos", "orders", "rates"]'::jsonb, true),
-(4, 'ALMACEN', 'Acceso a inventario, productos, proveedores y recepción de compras', '["products", "compras", "terceros"]'::jsonb, true)
+(1, 'ADMINISTRADOR', 'Acceso completo a todos los módulos y configuraciones del sistema', '["pos", "price_list", "orders", "compras", "pagos", "products", "import_excel", "terceros", "bancos", "rates", "impuestos", "reports", "reports_profit", "users", "maintenance"]'::jsonb, true),
+(2, 'SUPERVISOR', 'Acceso a ventas, compras, productos, clientes y reportes operativos', '["pos", "price_list", "orders", "compras", "pagos", "products", "terceros", "bancos", "rates", "reports"]'::jsonb, true),
+(3, 'CAJERO', 'Acceso exclusivo para facturación en Punto de Venta y consulta de tasa', '["pos", "price_list", "orders", "rates"]'::jsonb, true),
+(4, 'ALMACEN', 'Acceso a inventario, productos, proveedores y recepción de compras', '["products", "import_excel", "compras", "terceros"]'::jsonb, true)
 ON CONFLICT (id) DO NOTHING;
+
+UPDATE m_rol
+SET permisos = permisos || (
+  SELECT COALESCE(jsonb_agg(to_jsonb(p)), '[]'::jsonb)
+  FROM unnest(ARRAY['price_list', 'import_excel', 'pagos', 'bancos']) AS p
+  WHERE NOT (permisos @> jsonb_build_array(p))
+)
+WHERE id = 1
+  AND jsonb_typeof(permisos) = 'array'
+  AND NOT (permisos @> '["price_list", "import_excel", "pagos", "bancos"]'::jsonb);
 
 SELECT setval('m_rol_id_seq', COALESCE((SELECT MAX(id) FROM m_rol), 4));
 

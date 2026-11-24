@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getPool, query, ensureAuthTables } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET: Consultar pagos (con filtros por pedido_id, compra_id o tercero_id)
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['pagos', 'orders', 'compras'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const { searchParams } = new URL(req.url);
@@ -86,6 +90,9 @@ export async function GET(req: Request) {
 
 // POST: Registrar un nuevo pago (abono o cobro independiente)
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['pagos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
@@ -102,7 +109,6 @@ export async function POST(req: Request) {
       monto_equivalente_usd,
       referencia,
       nota,
-      creado_por,
       imputaciones, // Array<{ tipo_documento: 'VENTA' | 'COMPRA', pedido_id?: number, compra_id?: number, monto_imputado_original: number, monto_imputado_usd: number }>
     } = body;
 
@@ -149,7 +155,7 @@ export async function POST(req: Request) {
           montoEqUsd,
           referencia ? String(referencia).trim() : null,
           nota ? String(nota).trim() : null,
-          creado_por ? Number(creado_por) : null,
+          auth.session.user.id,
         ]
       );
 

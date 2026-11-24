@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET all or filtered thirds (Clients / Suppliers)
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, {
+    permissions: ['terceros', 'pos', 'compras', 'pagos', 'orders'],
+  });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const tipo = searchParams.get('tipo'); // 'CLIENTE' | 'PROVEEDOR' | 'AMBOS'
@@ -51,6 +57,9 @@ export async function GET(req: Request) {
 
 // POST create third
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['terceros', 'pos', 'compras'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
     const { tipo = 'CLIENTE', identificacion, razon_social_nombre, direccion, telefono, email, activo = true } = body;
@@ -103,6 +112,9 @@ export async function POST(req: Request) {
 
 // PUT update third
 export async function PUT(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['terceros'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const body = await req.json();
     const { id, tipo, identificacion, razon_social_nombre, direccion, telefono, email, activo } = body;
@@ -164,6 +176,9 @@ export async function PUT(req: Request) {
 
 // DELETE delete or deactivate third
 export async function DELETE(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['terceros'] });
+  if (!auth.ok) return auth.response;
+
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');

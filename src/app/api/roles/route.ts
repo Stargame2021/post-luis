@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { query, ensureAuthTables } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET: Listar todos los roles y cantidad de usuarios asignados
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['users'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const roles = await query(
@@ -34,6 +38,9 @@ export async function GET() {
 
 // POST: Crear un nuevo rol
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['users'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
@@ -68,6 +75,9 @@ export async function POST(req: Request) {
 
 // PUT: Modificar un rol
 export async function PUT(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['users'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
@@ -79,12 +89,25 @@ export async function PUT(req: Request) {
 
     const rolId = Number(id);
 
-    // No permitir desactivar ni quitar todos los permisos al rol de ADMINISTRADOR (id 1)
+    // No permitir desactivar ni quitar permisos esenciales al rol de ADMINISTRADOR (id 1)
     if (rolId === 1 && activo === false) {
       return NextResponse.json(
         { success: false, message: 'No se puede desactivar el rol de ADMINISTRADOR' },
         { status: 400 }
       );
+    }
+
+    if (rolId === 1 && permisos !== undefined) {
+      const permsList = Array.isArray(permisos) ? permisos.map((p) => String(p)) : [];
+      if (permsList.length === 0 || !permsList.includes('users') || !permsList.includes('maintenance')) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'El rol ADMINISTRADOR no puede quedar sin permisos y debe conservar al menos "users" y "maintenance".',
+          },
+          { status: 400 }
+        );
+      }
     }
 
     const cleanNombre = nombre ? String(nombre).trim().toUpperCase() : null;

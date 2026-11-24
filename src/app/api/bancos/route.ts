@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { query, ensureAuthTables } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 // GET: Consultar bancos / entidades financieras / cajas registradas
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['bancos', 'pagos', 'pos', 'compras'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const sql = `
@@ -26,6 +30,9 @@ export async function GET() {
 
 // POST: Crear un nuevo banco o caja
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['bancos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
@@ -60,6 +67,9 @@ export async function POST(req: Request) {
 
 // PUT: Modificar un banco o caja existente
 export async function PUT(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['bancos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();

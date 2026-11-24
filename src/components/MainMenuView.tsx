@@ -31,7 +31,8 @@ import {
   Tag,
   FileSpreadsheet,
 } from 'lucide-react';
-import { Tasa, DashboardData, Usuario, ModuloPermiso } from '@/types';
+import { Tasa, DashboardData, Usuario } from '@/types';
+import { hasTabPermission } from '@/lib/permissions';
 
 interface MainMenuViewProps {
   onNavigate: (tab: any, subTab?: 'ventas' | 'rentabilidad' | 'inventario') => void;
@@ -362,26 +363,7 @@ export default function MainMenuView({
   ];
 
   const hasPermission = (id: string, subTab?: string): boolean => {
-    if (!currentUser || !currentUser.permisos) return true; // Si no hay usuario definido, permite
-    const perms = currentUser.permisos;
-    if (id === 'dashboard') return true;
-    if (id === 'pos') return perms.includes('pos');
-    if (id === 'price_list') return perms.includes('price_list') || perms.includes('pos');
-    if (id === 'orders') return perms.includes('orders');
-    if (id === 'compras') return perms.includes('compras');
-    if (id === 'products') return perms.includes('products');
-    if (id === 'import_excel') return perms.includes('import_excel') || perms.includes('products');
-    if (id === 'terceros') return perms.includes('terceros');
-    if (id === 'bancos') return perms.includes('terceros') || perms.includes('compras') || perms.includes('users');
-    if (id === 'impuestos') return perms.includes('impuestos');
-    if (id === 'rates') return perms.includes('rates');
-    if (id === 'users') return perms.includes('users');
-    if (id === 'maintenance' || id === 'db_config') return perms.includes('maintenance') || perms.includes('users');
-    if (id === 'reports') {
-      if (subTab === 'rentabilidad') return perms.includes('reports_profit') || perms.includes('reports');
-      return perms.includes('reports');
-    }
-    return true;
+    return hasTabPermission(currentUser, id, subTab);
   };
 
   const renderCard = (item: any) => {

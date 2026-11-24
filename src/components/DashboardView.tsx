@@ -42,8 +42,8 @@ ChartJS.register(
 
 interface DashboardViewProps {
   data: DashboardData | null;
-  onNavigatePos: () => void;
-  onNavigateRates: () => void;
+  onNavigatePos?: () => void;
+  onNavigateRates?: () => void;
   onNavigateCompras?: () => void;
   onNavigateProducts?: () => void;
   isDarkMode?: boolean;
@@ -228,11 +228,17 @@ export default function DashboardView({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5">
         {/* WIDGET 1: Tasa de Cambio Actual */}
         <div
-          onClick={onNavigateRates}
-          className={`relative overflow-hidden group cursor-pointer rounded-2xl border p-4 transition-all shadow-sm ${
+          onClick={onNavigateRates || undefined}
+          className={`relative overflow-hidden group rounded-2xl border p-4 transition-all shadow-sm ${
+            onNavigateRates ? 'cursor-pointer' : ''
+          } ${
             isDarkMode
-              ? 'bg-gradient-to-br from-indigo-950/70 via-slate-900 to-slate-950 border-indigo-500/40 hover:border-indigo-400'
-              : 'bg-gradient-to-br from-indigo-50/70 via-white to-white border-indigo-200 hover:border-indigo-300'
+              ? `bg-gradient-to-br from-indigo-950/70 via-slate-900 to-slate-950 border-indigo-500/40 ${
+                  onNavigateRates ? 'hover:border-indigo-400' : ''
+                }`
+              : `bg-gradient-to-br from-indigo-50/70 via-white to-white border-indigo-200 ${
+                  onNavigateRates ? 'hover:border-indigo-300' : ''
+                }`
           }`}
         >
           <div className="flex items-center justify-between mb-2">
@@ -241,7 +247,9 @@ export default function DashboardView({
             }`}>
               <TrendingUp className="w-3 h-3" /> Tasa Hoy
             </span>
-            <ArrowUpRight className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 transition" />
+            {onNavigateRates && (
+              <ArrowUpRight className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 transition" />
+            )}
           </div>
           <div className={`text-xl font-black font-mono ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
             {currentRateVal > 0 ? `${currentRateVal.toFixed(4)}` : 'S/A'}
@@ -300,9 +308,13 @@ export default function DashboardView({
 
         {/* WIDGET 4: Compras Totales (NEW) */}
         <div
-          onClick={onNavigateCompras}
-          className={`rounded-2xl border p-4 shadow-sm cursor-pointer transition group ${
-            isDarkMode ? 'bg-slate-900/60 border-slate-800 hover:border-slate-700' : 'bg-white border-slate-200 hover:border-slate-300'
+          onClick={onNavigateCompras || undefined}
+          className={`rounded-2xl border p-4 shadow-sm transition group ${
+            onNavigateCompras ? 'cursor-pointer' : ''
+          } ${
+            isDarkMode
+              ? `bg-slate-900/60 border-slate-800 ${onNavigateCompras ? 'hover:border-slate-700' : ''}`
+              : `bg-white border-slate-200 ${onNavigateCompras ? 'hover:border-slate-300' : ''}`
           }`}
         >
           <div className="flex items-center justify-between mb-2">
@@ -325,9 +337,13 @@ export default function DashboardView({
 
         {/* WIDGET 5: Inventario Valorizado al Costo (NEW) */}
         <div
-          onClick={onNavigateProducts}
-          className={`rounded-2xl border p-4 shadow-sm cursor-pointer transition group ${
-            isDarkMode ? 'bg-slate-900/60 border-slate-800 hover:border-slate-700' : 'bg-white border-slate-200 hover:border-slate-300'
+          onClick={onNavigateProducts || undefined}
+          className={`rounded-2xl border p-4 shadow-sm transition group ${
+            onNavigateProducts ? 'cursor-pointer' : ''
+          } ${
+            isDarkMode
+              ? `bg-slate-900/60 border-slate-800 ${onNavigateProducts ? 'hover:border-slate-700' : ''}`
+              : `bg-white border-slate-200 ${onNavigateProducts ? 'hover:border-slate-300' : ''}`
           }`}
         >
           <div className="flex items-center justify-between mb-2">
@@ -359,11 +375,13 @@ export default function DashboardView({
 
         {/* WIDGET 6: Acceso Rápido POS */}
         <div
-          onClick={onNavigatePos}
-          className={`rounded-2xl border p-4 shadow-sm cursor-pointer transition flex flex-col justify-between group ${
+          onClick={onNavigatePos || undefined}
+          className={`rounded-2xl border p-4 shadow-sm transition flex flex-col justify-between group ${
+            onNavigatePos ? 'cursor-pointer' : ''
+          } ${
             isDarkMode
-              ? 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-              : 'bg-white border-slate-200 hover:border-slate-300'
+              ? `bg-slate-900/60 border-slate-800 ${onNavigatePos ? 'hover:border-slate-700' : ''}`
+              : `bg-white border-slate-200 ${onNavigatePos ? 'hover:border-slate-300' : ''}`
           }`}
         >
           <div className="flex items-center justify-between">
@@ -372,13 +390,17 @@ export default function DashboardView({
             }`}>
               <ShoppingCart className="w-3 h-3 text-indigo-500" /> Punto de Venta
             </span>
-            <div className="p-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 group-hover:bg-indigo-600 group-hover:text-white transition">
-              <ArrowUpRight className="w-3 h-3" />
-            </div>
+            {onNavigatePos && (
+              <div className="p-1 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 group-hover:bg-indigo-600 group-hover:text-white transition">
+                <ArrowUpRight className="w-3 h-3" />
+              </div>
+            )}
           </div>
           <div className="mt-2">
             <div className={`text-xs font-bold transition ${
-              isDarkMode ? 'text-white group-hover:text-indigo-300' : 'text-slate-900 group-hover:text-indigo-600'
+              isDarkMode
+                ? `text-white ${onNavigatePos ? 'group-hover:text-indigo-300' : ''}`
+                : `text-slate-900 ${onNavigatePos ? 'group-hover:text-indigo-600' : ''}`
             }`}>
               Nueva Venta
             </div>

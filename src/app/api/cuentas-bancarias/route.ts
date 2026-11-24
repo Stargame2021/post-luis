@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { query, ensureAuthTables } from '@/lib/db';
+import { requireAuth } from '@/lib/api-auth';
 
 export async function GET(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['bancos', 'pagos', 'pos', 'compras'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const { searchParams } = new URL(req.url);
@@ -36,6 +40,9 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['bancos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
@@ -74,6 +81,9 @@ export async function POST(req: Request) {
 }
 
 export async function PUT(req: Request) {
+  const auth = await requireAuth(req, { permissions: ['bancos'] });
+  if (!auth.ok) return auth.response;
+
   try {
     await ensureAuthTables();
     const body = await req.json();
