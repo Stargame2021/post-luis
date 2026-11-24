@@ -1,4 +1,11 @@
-import { Producto, Presentacion } from '@/types';
+import { Presentacion } from '@/types';
+
+export interface ProductoConPresentaciones {
+  unidad_base?: string | null;
+  precio_usd?: number | string | null;
+  stock_actual?: number | string | null;
+  presentaciones?: Presentacion[] | null;
+}
 
 /** Opción de venta/compra de un producto: la unidad base (id null) o una presentación. */
 export interface OpcionUnidad {
@@ -21,7 +28,7 @@ export interface SegmentacionMedida {
 }
 
 /** Devuelve la unidad base + todas las presentaciones del producto, ordenadas por factor. */
-export function getOpcionesUnidad(p: any): OpcionUnidad[] {
+export function getOpcionesUnidad(p: ProductoConPresentaciones): OpcionUnidad[] {
   const base: OpcionUnidad = {
     id: null,
     nombre: p.unidad_base || 'Unidad',
@@ -40,7 +47,10 @@ export function getOpcionesUnidad(p: any): OpcionUnidad[] {
   return [base, ...pres];
 }
 
-export function getOpcionUnidad(p: any, presentacionId: number | null): OpcionUnidad {
+export function getOpcionUnidad(
+  p: ProductoConPresentaciones,
+  presentacionId: number | null
+): OpcionUnidad {
   const ops = getOpcionesUnidad(p);
   return ops.find((o) => o.id === presentacionId) || ops[0];
 }
@@ -53,7 +63,10 @@ function fmtNum(n: number): string {
  * Desglose usando la presentación mayor.
  * Ej: 293 cervezas con Caja x30 -> "9 caja + 23 Unidad".
  */
-export function formatStockDesglose(p: any, stockBase?: number): string {
+export function formatStockDesglose(
+  p: ProductoConPresentaciones,
+  stockBase?: number
+): string {
   const stock = stockBase !== undefined ? stockBase : Number(p.stock_actual) || 0;
   const unidad = p.unidad_base || 'Unidad';
   const ops = getOpcionesUnidad(p);
@@ -75,7 +88,10 @@ export function formatStockDesglose(p: any, stockBase?: number): string {
  * 293 = 9 cajas (270) + 3 combos (21) + 2 unidades.
  * -> "9 caja + 3 combo + 2 Unidad"
  */
-export function formatStockDesgloseCompleto(p: any, stockBase?: number): string {
+export function formatStockDesgloseCompleto(
+  p: ProductoConPresentaciones,
+  stockBase?: number
+): string {
   let stock = stockBase !== undefined ? stockBase : Number(p.stock_actual) || 0;
   const unidad = p.unidad_base || 'Unidad';
   if (stock <= 0) return `0 ${unidad}`;
@@ -110,7 +126,10 @@ export function formatStockDesgloseCompleto(p: any, stockBase?: number): string 
  * - Combo x7: 41 combos completos (+ 6 un.) a $7 c/u ($1.00 c/u)
  * - Unidad: 293 unidades completas a $1.50 c/u
  */
-export function getSegmentacionExistencias(p: any, stockBase?: number): SegmentacionMedida[] {
+export function getSegmentacionExistencias(
+  p: ProductoConPresentaciones,
+  stockBase?: number
+): SegmentacionMedida[] {
   const stock = stockBase !== undefined ? stockBase : Number(p.stock_actual) || 0;
   const precioBase = Number(p.precio_usd) || 0;
   const ops = getOpcionesUnidad(p);
@@ -119,13 +138,16 @@ export function getSegmentacionExistencias(p: any, stockBase?: number): Segmenta
     const factor = op.factor || 1;
     const completas = Math.floor(stock / factor);
     const resto = Number((stock - completas * factor).toFixed(3));
-    const equiv = factor > 0 ? Number(((op.precio_usd || 0) / factor).toFixed(4)) : (op.precio_usd || 0);
-    const valorPotencial = Number(((completas * (op.precio_usd || 0)) + (resto * precioBase)).toFixed(2));
+    const equiv =
+      factor > 0 ? Number(((op.precio_usd || 0) / factor).toFixed(4)) : op.precio_usd || 0;
+    const valorPotencial = Number(
+      (completas * (op.precio_usd || 0) + resto * precioBase).toFixed(2)
+    );
 
     return {
       id: op.id,
       nombre: op.nombre,
-      factor: factor,
+      factor,
       precio_usd: Number(op.precio_usd) || 0,
       precio_unitario_equivalente: equiv,
       unidades_completas: completas,

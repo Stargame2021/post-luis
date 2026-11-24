@@ -4,6 +4,10 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Sistema POS",
   description: "Sistema de ventas POS",
+  icons: {
+    icon: "/icono.ico",
+    apple: "/icono.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
