@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db';
 import { requireAuth } from '@/lib/api-auth';
+import {
+  AccountingError,
+  resolveServerUnitPrice,
+  validateBankAccountCurrency,
+  voidLinkedDocumentPayments,
+} from '@/lib/accounting';
 
 export interface OrderLineInput {
   producto_id: number;
   cantidad: number;
-  precio_unitario_usd: number;
+  precio_unitario_usd?: number;
   presentacion_id?: number | null;
   subtotal_usd?: number;
 }
@@ -103,9 +109,12 @@ export async function GET(req: Request) {
     );
 
     return NextResponse.json({ success: true, orders });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al obtener pedidos' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al obtener pedidos',
+      },
       { status: 500 }
     );
   }
@@ -196,16 +205,15 @@ export async function POST(req: Request) {
     for (const item of items) {
       const pId = Number(item.producto_id);
       const qty = Number(item.cantidad);
-      const unitPrice = Number(item.precio_unitario_usd);
       const presId = item.presentacion_id ? Number(item.presentacion_id) : null;
 
-      if (!pId || qty <= 0 || unitPrice < 0) {
-        throw new Error('Detalles de línea de pedido inválidos.');
+      if (!pId || !Number.isFinite(qty) || qty <= 0) {
+        throw new AccountingError(400, 'Detalles de línea de pedido inválidos.');
       }
 
-      // Lock product for atomic stock check and discount
+      // Lock product for atomic stock check, server price lookup, and discount
       const prodRes = await client.query(
-        `SELECT p.id, p.nombre, p.stock_actual, p.impuesto_id,
+        `SELECT p.id, p.nombre, p.precio_usd, p.stock_actual, p.impuesto_id,
                 COALESCE(p.unidad_base, 'Unidad') as unidad_base,
                 COALESCE(i.porcentaje, 16.00)::numeric as impuesto_porcentaje
          FROM m_producto p
@@ -215,31 +223,38 @@ export async function POST(req: Request) {
       );
 
       if (prodRes.rows.length === 0) {
-        throw new Error(`Producto #${pId} no encontrado en la base de datos.`);
+        throw new AccountingError(404, `Producto #${pId} no encontrado en la base de datos.`);
       }
 
       const prod = prodRes.rows[0];
       const stockDisponible = Number(prod.stock_actual) || 0;
 
-      // Resolver presentación (null = unidad base, factor 1)
+      // Resolver presentación y precio oficial desde BD (null = unidad base, factor 1)
       let factor = 1;
       let presNombre = String(prod.unidad_base);
+      let presRow: { precio_usd: unknown } | null = null;
       if (presId) {
         const presRes = await client.query(
-          'SELECT nombre, factor FROM m_producto_presentacion WHERE id = $1 AND producto_id = $2',
+          'SELECT nombre, factor, precio_usd FROM m_producto_presentacion WHERE id = $1 AND producto_id = $2',
           [presId, pId]
         );
         if (presRes.rows.length === 0) {
-          throw new Error(`La presentación seleccionada para "${prod.nombre}" no existe.`);
+          throw new AccountingError(
+            400,
+            `La presentación seleccionada para "${prod.nombre}" no existe.`
+          );
         }
         factor = Number(presRes.rows[0].factor);
         presNombre = String(presRes.rows[0].nombre);
+        presRow = presRes.rows[0];
       }
+      const unitPrice = resolveServerUnitPrice(prod.precio_usd, presRow);
       const qtyBase = Number((qty * factor).toFixed(3));
 
       // Check stock availability (en unidad base)
       if (!permitir_stock_negativo && stockDisponible < qtyBase) {
-        throw new Error(
+        throw new AccountingError(
+          400,
           `Stock insuficiente para "${prod.nombre}". Solicitado: ${qty} ${presNombre} (${qtyBase} ${prod.unidad_base}), disponible: ${stockDisponible} ${prod.unidad_base}.`
         );
       }
@@ -307,17 +322,27 @@ export async function POST(req: Request) {
 
     // Si registrar_pago es true (o no es crédito sin abono inicial), crear registro en t_pago y t_pago_documento
     if ((registrar_pago && condicion_pago === 'CONTADO') || (registrar_pago && Number(monto_pago) > 0)) {
-      // Obtener moneda del tipo de pago seleccionado
-      const tpRes = await client.query('SELECT moneda FROM m_tipopago WHERE id = $1', [Number(tipo_pago_id || 1)]);
-      const tpMoneda = tpRes.rows.length > 0 ? tpRes.rows[0].moneda : 'USD';
-      
-      const pagoOriginal = Number(monto_pago) > 0 
-        ? Number(monto_pago)
-        : tpMoneda === 'VES' ? totalLocal : totalUsd;
-      
-      const pagoEquivUsd = tpMoneda === 'VES'
-        ? Number((pagoOriginal / rate).toFixed(2))
-        : pagoOriginal;
+      // Obtener y validar moneda del tipo de pago y cuenta bancaria seleccionada
+      const tpRes = await client.query('SELECT id, moneda FROM m_tipopago WHERE id = $1', [
+        Number(tipo_pago_id || 1),
+      ]);
+      if (tpRes.rows.length === 0) {
+        throw new AccountingError(400, 'El método de pago seleccionado no existe.');
+      }
+      const tpMoneda = String(tpRes.rows[0].moneda);
+      if (cuenta_bancaria_id) {
+        await validateBankAccountCurrency(client, Number(cuenta_bancaria_id), tpMoneda);
+      }
+
+      const pagoOriginal =
+        Number(monto_pago) > 0
+          ? Number(monto_pago)
+          : tpMoneda === 'VES'
+          ? totalLocal
+          : totalUsd;
+
+      const pagoEquivUsd =
+        tpMoneda === 'VES' ? Number((pagoOriginal / rate).toFixed(2)) : pagoOriginal;
 
       const tipoOperacion = condicion_pago === 'CONTADO' ? 'COBRO_VENTA' : 'ABONO_VENTA';
 
@@ -396,11 +421,20 @@ export async function POST(req: Request) {
       order: nuevoPedido,
       message: 'Venta registrada e inventario actualizado con éxito',
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK');
+    if (error instanceof AccountingError) {
+      return NextResponse.json(
+        { success: false, message: error.message },
+        { status: error.status }
+      );
+    }
     console.error('Error inserting order:', error);
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al procesar la venta' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al procesar la venta',
+      },
       { status: 500 }
     );
   } finally {
@@ -440,12 +474,12 @@ export async function PATCH(req: Request) {
     // Fetch order with row lock
     const orderRes = await client.query('SELECT * FROM t_pedido WHERE id = $1 FOR UPDATE', [Number(id)]);
     if (orderRes.rows.length === 0) {
-      throw new Error('Pedido no encontrado');
+      throw new AccountingError(404, 'Pedido no encontrado');
     }
 
     const pedido = orderRes.rows[0];
-    const estadoAnterior = pedido.estado || 'COMPLETADO';
-    const nuevoEstado = estado;
+    const estadoAnterior = String(pedido.estado || 'COMPLETADO');
+    const nuevoEstado = String(estado);
 
     if (estadoAnterior === nuevoEstado) {
       await client.query('COMMIT');
@@ -455,30 +489,35 @@ export async function PATCH(req: Request) {
       });
     }
 
+    if (estadoAnterior === 'ANULADO' && nuevoEstado === 'COMPLETADO') {
+      throw new AccountingError(
+        400,
+        'No se puede reactivar un pedido anulado porque sus pagos ya fueron revertidos. Registre una nueva venta.'
+      );
+    }
+
     // Fetch order lines
     const linesRes = await client.query(
       'SELECT producto_id, COALESCE(cantidad_base, cantidad) as cantidad FROM t_pedidolinea WHERE pedido_id = $1',
       [Number(id)]
     );
 
-    // Si se ANULA un pedido que estaba COMPLETADO: RESTAURAR inventario (sumar stock)
+    // Si se ANULA un pedido que estaba COMPLETADO: RESTAURAR inventario y anular pagos vinculados
     if (estadoAnterior === 'COMPLETADO' && nuevoEstado === 'ANULADO') {
       for (const line of linesRes.rows) {
+        const prodId = Number(line.producto_id);
+        await client.query('SELECT id FROM m_producto WHERE id = $1 FOR UPDATE', [prodId]);
         await client.query(
           'UPDATE m_producto SET stock_actual = stock_actual + $1 WHERE id = $2',
-          [Number(line.cantidad), Number(line.producto_id)]
+          [Number(line.cantidad), prodId]
         );
       }
-    }
 
-    // Si se reactiva de ANULADO a COMPLETADO: Restar inventario nuevamente
-    if (estadoAnterior === 'ANULADO' && nuevoEstado === 'COMPLETADO') {
-      for (const line of linesRes.rows) {
-        await client.query(
-          'UPDATE m_producto SET stock_actual = stock_actual - $1 WHERE id = $2',
-          [Number(line.cantidad), Number(line.producto_id)]
-        );
-      }
+      await voidLinkedDocumentPayments(client, {
+        tipo: 'VENTA',
+        docId: Number(id),
+        userId: auth.session.user.id,
+      });
     }
 
     // Actualizar estado del pedido
@@ -488,16 +527,22 @@ export async function PATCH(req: Request) {
 
     return NextResponse.json({
       success: true,
-      message:
-        nuevoEstado === 'ANULADO'
-          ? 'Pedido anulado y stock devuelto al inventario con éxito'
-          : 'Pedido reactivado a completado con éxito',
+      message: 'Pedido anulado, stock devuelto al inventario y pagos revertidos con éxito',
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK');
+    if (error instanceof AccountingError) {
+      return NextResponse.json(
+        { success: false, message: error.message },
+        { status: error.status }
+      );
+    }
     console.error('Error updating order status:', error);
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al cambiar estado del pedido' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al cambiar estado del pedido',
+      },
       { status: 500 }
     );
   } finally {

@@ -13,7 +13,7 @@ export async function GET(req: Request) {
     const tipo = searchParams.get('tipo'); // 'VENTA' o 'COMPRA' o undefined
     const terceroId = searchParams.get('tercero_id');
 
-    const params: any[] = [];
+    const params: unknown[] = [];
     let sqlVentas = `
       SELECT 
         p.id,
@@ -25,12 +25,13 @@ export async function GET(req: Request) {
         p.condicion_pago,
         p.total_usd::numeric as total_usd,
         p.total_moneda_local::numeric as total_local,
-        COALESCE(SUM(pd.monto_imputado_usd), 0)::numeric as total_pagado_usd,
-        (p.total_usd - COALESCE(SUM(pd.monto_imputado_usd), 0))::numeric as saldo_pendiente_usd,
-        ROUND((p.total_usd - COALESCE(SUM(pd.monto_imputado_usd), 0)) * p.tasa_cambio_aplicada, 2)::numeric as saldo_pendiente_local
+        COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0)::numeric as total_pagado_usd,
+        (p.total_usd - COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0))::numeric as saldo_pendiente_usd,
+        ROUND((p.total_usd - COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0)) * p.tasa_cambio_aplicada, 2)::numeric as saldo_pendiente_local
       FROM t_pedido p
       LEFT JOIN m_tercero t ON t.id = p.tercero_id
       LEFT JOIN t_pago_documento pd ON pd.pedido_id = p.id
+      LEFT JOIN t_pago pg ON pg.id = pd.pago_id AND pg.estado = 'APROBADO'
       WHERE p.estado = 'COMPLETADO'
     `;
 
@@ -41,11 +42,11 @@ export async function GET(req: Request) {
 
     sqlVentas += `
       GROUP BY p.id, t.razon_social_nombre, p.cliente_nombre, p.condicion_pago, p.total_usd, p.total_moneda_local, p.tasa_cambio_aplicada
-      HAVING (p.total_usd - COALESCE(SUM(pd.monto_imputado_usd), 0)) > 0.009
+      HAVING (p.total_usd - COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0)) > 0.009
       ORDER BY p.fecha_hora ASC
     `;
 
-    const paramsCompras: any[] = [];
+    const paramsCompras: unknown[] = [];
     let sqlCompras = `
       SELECT 
         c.id,
@@ -57,12 +58,13 @@ export async function GET(req: Request) {
         c.condicion_pago,
         c.total_usd::numeric as total_usd,
         c.total_moneda_local::numeric as total_local,
-        COALESCE(SUM(pd.monto_imputado_usd), 0)::numeric as total_pagado_usd,
-        (c.total_usd - COALESCE(SUM(pd.monto_imputado_usd), 0))::numeric as saldo_pendiente_usd,
-        ROUND((c.total_usd - COALESCE(SUM(pd.monto_imputado_usd), 0)) * c.tasa_cambio_aplicada, 2)::numeric as saldo_pendiente_local
+        COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0)::numeric as total_pagado_usd,
+        (c.total_usd - COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0))::numeric as saldo_pendiente_usd,
+        ROUND((c.total_usd - COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0)) * c.tasa_cambio_aplicada, 2)::numeric as saldo_pendiente_local
       FROM t_compra c
       JOIN m_tercero t ON t.id = c.tercero_id
       LEFT JOIN t_pago_documento pd ON pd.compra_id = c.id
+      LEFT JOIN t_pago pg ON pg.id = pd.pago_id AND pg.estado = 'APROBADO'
       WHERE c.estado = 'COMPLETADO'
     `;
 
@@ -73,11 +75,11 @@ export async function GET(req: Request) {
 
     sqlCompras += `
       GROUP BY c.id, t.razon_social_nombre, c.condicion_pago, c.total_usd, c.total_moneda_local, c.tasa_cambio_aplicada
-      HAVING (c.total_usd - COALESCE(SUM(pd.monto_imputado_usd), 0)) > 0.009
+      HAVING (c.total_usd - COALESCE(SUM(CASE WHEN pg.id IS NOT NULL THEN pd.monto_imputado_usd ELSE 0 END), 0)) > 0.009
       ORDER BY c.fecha_emision ASC
     `;
 
-    let documentos: any[] = [];
+    let documentos: Record<string, unknown>[] = [];
 
     if (!tipo || tipo === 'VENTA') {
       const resVentas = await query(sqlVentas, params);
@@ -90,10 +92,14 @@ export async function GET(req: Request) {
     }
 
     return NextResponse.json({ success: true, documentos });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error fetching pendientes:', error);
     return NextResponse.json(
-      { success: false, message: 'Error al consultar documentos pendientes', error: error?.message },
+      {
+        success: false,
+        message: 'Error al consultar documentos pendientes',
+        error: error instanceof Error ? error.message : 'Error desconocido',
+      },
       { status: 500 }
     );
   }

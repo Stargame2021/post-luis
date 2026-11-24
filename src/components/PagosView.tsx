@@ -73,8 +73,10 @@ export default function PagosView({ isDarkMode = false, initialAction = null }: 
   const [referencia, setReferencia] = useState('');
   const [nota, setNota] = useState('');
 
-  // Expandir detalles de pago
+  // Expandir detalles y anulación de pago
   const [expandedPagoId, setExpandedPagoId] = useState<number | null>(null);
+  const [voidingId, setVoidingId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Cargar datos
   const loadData = async () => {
@@ -294,12 +296,44 @@ export default function PagosView({ isDarkMode = false, initialAction = null }: 
     return matchTipo && matchMoneda;
   });
 
-  // Totales
-  const totalCobrosUsd = pagos
+  const handleVoidPago = async (p: Pago) => {
+    if (p.estado === 'ANULADO') return;
+    if (
+      !confirm(
+        `¿Confirmas anular el pago #${p.id}? Esto revertirá el movimiento de saldo en la cuenta bancaria asociada.`
+      )
+    ) {
+      return;
+    }
+
+    setVoidingId(p.id);
+    setActionError(null);
+    try {
+      const res = await fetch('/api/pagos', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: p.id, estado: 'ANULADO' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await loadData();
+      } else {
+        setActionError(data.message || 'Error al anular el pago');
+      }
+    } catch {
+      setActionError('Error de conexión al anular el pago');
+    } finally {
+      setVoidingId(null);
+    }
+  };
+
+  // Totales (excluye pagos anulados)
+  const activePagos = pagos.filter((p) => p.estado !== 'ANULADO');
+  const totalCobrosUsd = activePagos
     .filter((p) => p.tipo_operacion.startsWith('COBRO') || p.tipo_operacion.startsWith('ABONO_VENTA'))
     .reduce((sum, p) => sum + Number(p.monto_equivalente_usd), 0);
 
-  const totalPagosUsd = pagos
+  const totalPagosUsd = activePagos
     .filter((p) => p.tipo_operacion.startsWith('PAGO') || p.tipo_operacion.startsWith('ABONO_COMPRA'))
     .reduce((sum, p) => sum + Number(p.monto_equivalente_usd), 0);
 
@@ -412,6 +446,19 @@ export default function PagosView({ isDarkMode = false, initialAction = null }: 
         </div>
       </div>
 
+      {actionError && (
+        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs flex items-center justify-between gap-2">
+          <span>{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-rose-400 hover:text-rose-300 font-bold"
+          >
+            Cerrar
+          </button>
+        </div>
+      )}
+
       {/* Tabla de Pagos Realizados */}
       <div className={`rounded-2xl border overflow-hidden ${
         isDarkMode ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200'
@@ -452,25 +499,33 @@ export default function PagosView({ isDarkMode = false, initialAction = null }: 
               ) : (
                 filteredPagos.map((p) => {
                   const isIngreso = p.tipo_operacion.startsWith('COBRO') || p.tipo_operacion.startsWith('ABONO_VENTA');
+                  const isAnulado = p.estado === 'ANULADO';
                   const hasDocs = p.documentos && p.documentos.length > 0;
                   const isExpanded = expandedPagoId === p.id;
 
                   return (
                     <Fragment key={p.id}>
-                      <tr className="hover:bg-slate-500/5 transition">
+                      <tr className={`hover:bg-slate-500/5 transition ${isAnulado ? 'opacity-65' : ''}`}>
                         <td className="py-3 px-4 font-mono text-slate-400">#{p.id}</td>
                         <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
                           {new Date(p.fecha_pago).toLocaleDateString('es-VE')} {new Date(p.fecha_pago).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' })}
                         </td>
                         <td className="py-3 px-4">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                            isIngreso
-                              ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
-                              : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
-                          }`}>
-                            {isIngreso ? <ArrowDownLeft className="w-3 h-3" /> : <ArrowUpRight className="w-3 h-3" />}
-                            {p.tipo_operacion.replace('_', ' ')}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                              isIngreso
+                                ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                                : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+                            }`}>
+                              {isIngreso ? <ArrowDownLeft className="w-3 h-3" /> : <ArrowUpRight className="w-3 h-3" />}
+                              {p.tipo_operacion.replace('_', ' ')}
+                            </span>
+                            {isAnulado && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-slate-500/30">
+                                ANULADO
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 px-4">
                           {p.tercero_nombre ? (
@@ -527,25 +582,42 @@ export default function PagosView({ isDarkMode = false, initialAction = null }: 
                         <td className="py-3 px-4 font-mono text-slate-500">
                           {p.referencia || '-'}
                         </td>
-                        <td className={`py-3 px-4 text-right font-mono font-bold ${isIngreso ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        <td className={`py-3 px-4 text-right font-mono font-bold ${
+                          isAnulado ? 'line-through text-slate-400' : isIngreso ? 'text-emerald-500' : 'text-rose-500'
+                        }`}>
                           {p.moneda === 'VES' ? 'Bs. ' : '$'}
                           {Number(p.monto_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })}
                         </td>
-                        <td className="py-3 px-4 text-right font-mono text-slate-700 dark:text-slate-200 font-bold">
+                        <td className={`py-3 px-4 text-right font-mono font-bold ${
+                          isAnulado ? 'line-through text-slate-400' : 'text-slate-700 dark:text-slate-200'
+                        }`}>
                           ${Number(p.monto_equivalente_usd).toFixed(2)}
                         </td>
                         <td className="py-3 px-4 text-center">
-                          {hasDocs ? (
-                            <button
-                              onClick={() => setExpandedPagoId(isExpanded ? null : p.id)}
-                              className="p-1 rounded-lg hover:bg-slate-500/10 text-slate-400 hover:text-indigo-400 transition"
-                              title="Ver facturas asociadas a este pago"
-                            >
-                              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                            </button>
-                          ) : (
-                            <span className="text-slate-400 text-[10px]">-</span>
-                          )}
+                          <div className="flex items-center justify-center gap-1">
+                            {hasDocs && (
+                              <button
+                                onClick={() => setExpandedPagoId(isExpanded ? null : p.id)}
+                                className="p-1 rounded-lg hover:bg-slate-500/10 text-slate-400 hover:text-indigo-400 transition"
+                                title="Ver facturas asociadas a este pago"
+                              >
+                                {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                              </button>
+                            )}
+                            {!isAnulado ? (
+                              <button
+                                type="button"
+                                onClick={() => handleVoidPago(p)}
+                                disabled={voidingId === p.id}
+                                title="Anular pago y revertir saldo bancario"
+                                className="px-2 py-1 rounded-lg border border-rose-500/30 text-rose-500 hover:bg-rose-500/10 text-[10px] font-bold transition disabled:opacity-50"
+                              >
+                                {voidingId === p.id ? '...' : 'Anular'}
+                              </button>
+                            ) : !hasDocs ? (
+                              <span className="text-slate-400 text-[10px]">-</span>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
 

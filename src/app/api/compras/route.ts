@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getPool, query } from '@/lib/db';
 import { requireAuth } from '@/lib/api-auth';
+import {
+  AccountingError,
+  calculateWeightedAverageCost,
+  validateBankAccountCurrency,
+  voidLinkedDocumentPayments,
+} from '@/lib/accounting';
 
 export interface PurchaseLineInput {
   producto_id: number;
@@ -98,9 +104,12 @@ export async function GET(req: Request) {
     );
 
     return NextResponse.json({ success: true, purchases });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al obtener facturas de compra' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al obtener facturas de compra',
+      },
       { status: 500 }
     );
   }
@@ -300,19 +309,29 @@ export async function POST(req: Request) {
 
     const nuevaCompra = compraRes.rows[0];
 
-    // Registrar en t_pago si registrar_pago es true y es contado
+    // Registrar en t_pago y t_pago_documento si registrar_pago es true y es contado
     if (registrar_pago && condicion_pago === 'CONTADO' && estadoDoc === 'COMPLETADO') {
-      const tpRes = await client.query('SELECT moneda FROM m_tipopago WHERE id = $1', [Number(tipo_pago_id || 1)]);
-      const tpMoneda = tpRes.rows.length > 0 ? tpRes.rows[0].moneda : 'USD';
+      const tpRes = await client.query('SELECT id, moneda FROM m_tipopago WHERE id = $1', [
+        Number(tipo_pago_id || 1),
+      ]);
+      if (tpRes.rows.length === 0) {
+        throw new AccountingError(400, 'El método de pago seleccionado no existe.');
+      }
+      const tpMoneda = String(tpRes.rows[0].moneda);
+      if (cuenta_bancaria_id) {
+        await validateBankAccountCurrency(client, Number(cuenta_bancaria_id), tpMoneda);
+      }
+
       const pagoOriginal = tpMoneda === 'VES' ? totalLocal : totalUsd;
       const pagoEquivUsd = tpMoneda === 'VES' ? Number((pagoOriginal / rate).toFixed(2)) : pagoOriginal;
 
-      await client.query(
+      const pagoRes = await client.query(
         `INSERT INTO t_pago (
           tipo_operacion, compra_id, tercero_id, tipo_pago_id, cuenta_bancaria_id,
           moneda, monto_original, tasa_cambio, monto_equivalente_usd,
           referencia, estado, creado_por
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'APROBADO', $11)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'APROBADO', $11)
+        RETURNING id`,
         [
           'PAGO_COMPRA',
           nuevaCompra.id,
@@ -326,6 +345,16 @@ export async function POST(req: Request) {
           referencia_pago ? String(referencia_pago).trim() : null,
           auth.session.user.id,
         ]
+      );
+
+      const nuevoPagoId = pagoRes.rows[0].id;
+
+      await client.query(
+        `INSERT INTO t_pago_documento (
+          pago_id, tipo_documento, compra_id,
+          monto_imputado_original, monto_imputado_usd
+        ) VALUES ($1, 'COMPRA', $2, $3, $4)`,
+        [nuevoPagoId, nuevaCompra.id, pagoOriginal, pagoEquivUsd]
       );
 
       // Descontar saldo de la cuenta emisora de la compra
@@ -374,22 +403,14 @@ export async function POST(req: Request) {
         }
 
         const prod = prodRes.rows[0];
-        const stockAnterior = Math.max(0, Number(prod.stock_actual) || 0);
-        const costoAnterior = Number(prod.costo_promedio_usd) || 0;
-        // Todo en unidad base: cantidad × factor y costo de la presentación ÷ factor
         const cantComprada = line.cantidad_base;
-        const costoCompra = line.costo_unitario_usd / line.factor_conversion;
-
-        let nuevoCostoPromedio = costoCompra;
-        const nuevoStockTotal = stockAnterior + cantComprada;
-
-        if (stockAnterior > 0 && nuevoStockTotal > 0) {
-          nuevoCostoPromedio = Number(
-            ((stockAnterior * costoAnterior + cantComprada * costoCompra) / nuevoStockTotal).toFixed(4)
-          );
-        } else {
-          nuevoCostoPromedio = Number(costoCompra.toFixed(4));
-        }
+        const nuevoCostoPromedio = calculateWeightedAverageCost({
+          stockAnterior: Number(prod.stock_actual) || 0,
+          costoAnterior: Number(prod.costo_promedio_usd) || 0,
+          cantidadBaseComprada: cantComprada,
+          costoUnitarioPresentacion: line.costo_unitario_usd,
+          factorConversion: line.factor_conversion,
+        });
 
         await client.query(
           `UPDATE m_producto
@@ -411,11 +432,20 @@ export async function POST(req: Request) {
           ? 'Factura de compra registrada e inventario incrementado con éxito'
           : `Factura de compra registrada en estado ${estadoDoc}`,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK');
+    if (error instanceof AccountingError) {
+      return NextResponse.json(
+        { success: false, message: error.message },
+        { status: error.status }
+      );
+    }
     console.error('Error inserting purchase:', error);
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al procesar la factura de compra' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al procesar la factura de compra',
+      },
       { status: 500 }
     );
   } finally {
@@ -455,42 +485,105 @@ export async function PATCH(req: Request) {
     // Fetch current purchase
     const compRes = await client.query('SELECT * FROM t_compra WHERE id = $1 FOR UPDATE', [Number(id)]);
     if (compRes.rows.length === 0) {
-      throw new Error('Factura de compra no encontrada');
+      throw new AccountingError(404, 'Factura de compra no encontrada');
     }
 
     const compra = compRes.rows[0];
-    const estadoAnterior = compra.estado;
-    const nuevoEstado = estado;
+    const estadoAnterior = String(compra.estado);
+    const nuevoEstado = String(estado);
 
     if (estadoAnterior === nuevoEstado) {
       await client.query('COMMIT');
       return NextResponse.json({ success: true, message: `La compra ya se encuentra en estado ${nuevoEstado}` });
     }
 
+    if (estadoAnterior === 'ANULADO') {
+      throw new AccountingError(
+        400,
+        'No se puede reactivar una compra anulada. Registre una nueva factura de compra.'
+      );
+    }
+
     // Fetch purchase lines
     const linesRes = await client.query(
-      'SELECT producto_id, COALESCE(cantidad_base, cantidad) as cantidad, costo_unitario_usd FROM t_compralinea WHERE compra_id = $1',
+      'SELECT producto_id, COALESCE(cantidad_base, cantidad) as cantidad, costo_unitario_usd, COALESCE(factor_conversion, 1) as factor_conversion FROM t_compralinea WHERE compra_id = $1',
       [Number(id)]
     );
 
-    // Si pasa a COMPLETADO (desde PROCESO o ANULADO), SUMAR inventario
-    if (nuevoEstado === 'COMPLETADO') {
+    // Si pasa de PROCESO a COMPLETADO, sumar inventario y recalcular costo promedio ponderado
+    if (estadoAnterior === 'PROCESO' && nuevoEstado === 'COMPLETADO') {
       for (const line of linesRes.rows) {
+        const prodId = Number(line.producto_id);
+        const prodRes = await client.query(
+          'SELECT id, stock_actual, costo_promedio_usd FROM m_producto WHERE id = $1 FOR UPDATE',
+          [prodId]
+        );
+        if (prodRes.rows.length === 0) {
+          throw new AccountingError(404, `Producto con ID ${prodId} no existe en catálogo.`);
+        }
+        const prod = prodRes.rows[0];
+        const cantComprada = Number(line.cantidad);
+        const nuevoCostoPromedio = calculateWeightedAverageCost({
+          stockAnterior: Number(prod.stock_actual) || 0,
+          costoAnterior: Number(prod.costo_promedio_usd) || 0,
+          cantidadBaseComprada: cantComprada,
+          costoUnitarioPresentacion: Number(line.costo_unitario_usd) || 0,
+          factorConversion: Number(line.factor_conversion) || 1,
+        });
         await client.query(
-          'UPDATE m_producto SET stock_actual = stock_actual + $1 WHERE id = $2',
-          [line.cantidad, line.producto_id]
+          `UPDATE m_producto
+           SET stock_actual = stock_actual + $1,
+               costo_promedio_usd = $2
+           WHERE id = $3`,
+          [cantComprada, nuevoCostoPromedio, prodId]
         );
       }
     }
 
-    // Si estaba COMPLETADO y pasa a ANULADO o PROCESO, REVERTIR / RESTAR inventario sumado
-    if (estadoAnterior === 'COMPLETADO' && (nuevoEstado === 'ANULADO' || nuevoEstado === 'PROCESO')) {
-      for (const line of linesRes.rows) {
-        await client.query(
-          'UPDATE m_producto SET stock_actual = stock_actual - $1 WHERE id = $2',
-          [line.cantidad, line.producto_id]
+    // Si pasa de COMPLETADO a PROCESO, bloquear si existen pagos aprobados asociados
+    if (estadoAnterior === 'COMPLETADO' && nuevoEstado === 'PROCESO') {
+      const pagosRes = await client.query(
+        `SELECT id FROM t_pago
+         WHERE estado = 'APROBADO'
+           AND (compra_id = $1 OR id IN (SELECT pago_id FROM t_pago_documento WHERE compra_id = $1))
+         LIMIT 1`,
+        [Number(id)]
+      );
+      if (pagosRes.rows.length > 0) {
+        throw new AccountingError(
+          409,
+          'No se puede devolver a PROCESO una compra con pagos aprobados. Anule los pagos primero o anule la compra.'
         );
       }
+
+      for (const line of linesRes.rows) {
+        const prodId = Number(line.producto_id);
+        await client.query('SELECT id FROM m_producto WHERE id = $1 FOR UPDATE', [prodId]);
+        await client.query(
+          'UPDATE m_producto SET stock_actual = stock_actual - $1 WHERE id = $2',
+          [Number(line.cantidad), prodId]
+        );
+      }
+    }
+
+    // Si pasa a ANULADO, revertir inventario (si estaba COMPLETADO) y anular pagos vinculados
+    if (nuevoEstado === 'ANULADO') {
+      if (estadoAnterior === 'COMPLETADO') {
+        for (const line of linesRes.rows) {
+          const prodId = Number(line.producto_id);
+          await client.query('SELECT id FROM m_producto WHERE id = $1 FOR UPDATE', [prodId]);
+          await client.query(
+            'UPDATE m_producto SET stock_actual = stock_actual - $1 WHERE id = $2',
+            [Number(line.cantidad), prodId]
+          );
+        }
+      }
+
+      await voidLinkedDocumentPayments(client, {
+        tipo: 'COMPRA',
+        docId: Number(id),
+        userId: auth.session.user.id,
+      });
     }
 
     await client.query('UPDATE t_compra SET estado = $1 WHERE id = $2', [nuevoEstado, Number(id)]);
@@ -501,11 +594,20 @@ export async function PATCH(req: Request) {
       success: true,
       message: `Estado de la compra #${id} actualizado a ${nuevoEstado} exitosamente.`,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK');
+    if (error instanceof AccountingError) {
+      return NextResponse.json(
+        { success: false, message: error.message },
+        { status: error.status }
+      );
+    }
     console.error('Error changing purchase state:', error);
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al actualizar estado de la compra' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al actualizar estado de la compra',
+      },
       { status: 500 }
     );
   } finally {

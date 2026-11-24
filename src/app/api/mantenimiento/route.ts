@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { requireAuth } from '@/lib/api-auth';
+import { AccountingError } from '@/lib/accounting';
 
 export async function GET(req: Request) {
   const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
@@ -15,23 +16,31 @@ export async function GET(req: Request) {
         (SELECT COUNT(*) FROM t_compra) as compras_count,
         (SELECT COUNT(*) FROM t_compralinea) as compralineas_count,
         (SELECT COUNT(*) FROM m_producto) as productos_count,
-        (SELECT COUNT(*) FROM m_tercero) as terceros_count
+        (SELECT COUNT(*) FROM m_tercero) as terceros_count,
+        (SELECT COUNT(*) FROM t_pago) as pagos_count,
+        (SELECT COUNT(*) FROM m_cuentabancaria WHERE saldo_actual <> 0) as cuentas_con_saldo_count
     `;
     const res = await pool.query(statsQuery);
+    const row = res.rows[0] || {};
     return NextResponse.json({
       success: true,
       stats: {
-        pedidos: Number(res.rows[0].pedidos_count || 0),
-        pedidolineas: Number(res.rows[0].pedidolineas_count || 0),
-        compras: Number(res.rows[0].compras_count || 0),
-        compralineas: Number(res.rows[0].compralineas_count || 0),
-        productos: Number(res.rows[0].productos_count || 0),
-        terceros: Number(res.rows[0].terceros_count || 0),
-      }
+        pedidos: Number(row.pedidos_count || 0),
+        pedidolineas: Number(row.pedidolineas_count || 0),
+        compras: Number(row.compras_count || 0),
+        compralineas: Number(row.compralineas_count || 0),
+        productos: Number(row.productos_count || 0),
+        terceros: Number(row.terceros_count || 0),
+        pagos: Number(row.pagos_count || 0),
+        cuentasConSaldo: Number(row.cuentas_con_saldo_count || 0),
+      },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al obtener estadísticas del sistema' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al obtener estadísticas del sistema',
+      },
       { status: 500 }
     );
   }
@@ -41,9 +50,9 @@ export async function POST(req: Request) {
   const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
   if (!auth.ok) return auth.response;
 
-  let body: any;
+  let body: Record<string, unknown>;
   try {
-    body = await req.json();
+    body = (await req.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json(
       { success: false, message: 'Cuerpo de solicitud inválido.' },
@@ -51,7 +60,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const { action, resetStock, newStockValue, confirmPhrase } = body ?? {};
+  const {
+    action,
+    resetStock,
+    newStockValue,
+    resetBalances = false,
+    newBalanceValue = 0,
+    confirmPhrase,
+  } = body ?? {};
 
   if (String(confirmPhrase || '').trim().toUpperCase() !== 'REINICIAR') {
     return NextResponse.json(
@@ -61,7 +77,10 @@ export async function POST(req: Request) {
   }
 
   // action can be: 'reset_ventas' | 'reset_compras' | 'reset_ambos' | 'reset_all'
-  if (!['reset_ventas', 'reset_compras', 'reset_ambos', 'reset_all'].includes(action)) {
+  if (
+    typeof action !== 'string' ||
+    !['reset_ventas', 'reset_compras', 'reset_ambos', 'reset_all'].includes(action)
+  ) {
     return NextResponse.json(
       { success: false, message: 'Acción no válida solicitada.' },
       { status: 400 }
@@ -73,6 +92,48 @@ export async function POST(req: Request) {
 
   try {
     await client.query('BEGIN');
+
+    if (action === 'reset_ventas') {
+      const compraPagosRes = await client.query(
+        `SELECT COUNT(*)::int AS cnt
+         FROM t_pago
+         WHERE compra_id IS NOT NULL
+            OR id IN (SELECT pago_id FROM t_pago_documento WHERE compra_id IS NOT NULL)`
+      );
+      if (Number(compraPagosRes.rows[0]?.cnt ?? 0) > 0) {
+        throw new AccountingError(
+          409,
+          'No se puede vaciar solo ventas porque existen pagos de compras que se borrarían en cascada. Usa "Vaciar Ventas y Compras" o limpia las compras primero.'
+        );
+      }
+    }
+
+    if (action === 'reset_compras') {
+      const ventaPagosRes = await client.query(
+        `SELECT COUNT(*)::int AS cnt
+         FROM t_pago
+         WHERE pedido_id IS NOT NULL
+            OR id IN (SELECT pago_id FROM t_pago_documento WHERE pedido_id IS NOT NULL)`
+      );
+      if (Number(ventaPagosRes.rows[0]?.cnt ?? 0) > 0) {
+        throw new AccountingError(
+          409,
+          'No se puede vaciar solo compras porque existen pagos de ventas que se borrarían en cascada. Usa "Vaciar Ventas y Compras" o limpia las ventas primero.'
+        );
+      }
+    }
+
+    const bankPaymentsRes = await client.query(
+      `SELECT COUNT(*)::int AS cnt
+       FROM t_pago
+       WHERE estado = 'APROBADO' AND cuenta_bancaria_id IS NOT NULL`
+    );
+    if (Number(bankPaymentsRes.rows[0]?.cnt ?? 0) > 0 && !resetBalances) {
+      throw new AccountingError(
+        409,
+        'Existen pagos aprobados vinculados a cuentas bancarias. Activa "Reestablecer saldos bancarios" para evitar descuadres en m_cuentabancaria.'
+      );
+    }
 
     const executedActions: string[] = [];
 
@@ -90,9 +151,22 @@ export async function POST(req: Request) {
 
     // 3. Opcional: Reestablecer stock de productos
     if (resetStock) {
-      const stockVal = typeof newStockValue === 'number' && !isNaN(newStockValue) ? newStockValue : 0;
+      const stockVal =
+        typeof newStockValue === 'number' && !isNaN(newStockValue) ? newStockValue : 0;
       await client.query('UPDATE m_producto SET stock_actual = $1', [stockVal]);
       executedActions.push(`Se actualizó el stock actual de todos los productos a ${stockVal}.`);
+    }
+
+    // 4. Opcional: Reestablecer saldos de cuentas bancarias y cajas
+    if (resetBalances) {
+      const balanceVal =
+        typeof newBalanceValue === 'number' && Number.isFinite(newBalanceValue)
+          ? newBalanceValue
+          : 0;
+      await client.query('UPDATE m_cuentabancaria SET saldo_actual = $1', [balanceVal]);
+      executedActions.push(
+        `Se actualizó el saldo de todas las cuentas bancarias y cajas a ${balanceVal}.`
+      );
     }
 
     await client.query('COMMIT');
@@ -102,11 +176,20 @@ export async function POST(req: Request) {
       message: 'Operación de mantenimiento completada exitosamente.',
       executedActions,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK');
+    if (error instanceof AccountingError) {
+      return NextResponse.json(
+        { success: false, message: error.message },
+        { status: error.status }
+      );
+    }
     console.error('Error en mantenimiento de base de datos:', error);
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al ejecutar el mantenimiento en la base de datos' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al ejecutar el mantenimiento en la base de datos',
+      },
       { status: 500 }
     );
   } finally {
