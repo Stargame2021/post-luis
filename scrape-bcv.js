@@ -4,8 +4,63 @@ const { Client } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
-// Leer variables de entorno o de .env
+const MONTHS_ES = {
+  enero: '01',
+  febrero: '02',
+  marzo: '03',
+  abril: '04',
+  mayo: '05',
+  junio: '06',
+  julio: '07',
+  agosto: '08',
+  septiembre: '09',
+  setiembre: '09',
+  octubre: '10',
+  noviembre: '11',
+  diciembre: '12',
+};
+
+const TLS_CHAIN_ERRORS = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_HAS_EXPIRED',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+function getCaracasDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Caracas',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = (parts.find((p) => p.type === 'year') || {}).value || '1970';
+  const month = (parts.find((p) => p.type === 'month') || {}).value || '01';
+  const day = (parts.find((p) => p.type === 'day') || {}).value || '01';
+  return `${year}-${month}-${day}`;
+}
+
+// Leer configuración desde DB_CONFIG_PATH, .dbconfig.json, .env o variables de entorno
 function getDbConfig() {
+  const configPath = process.env.DB_CONFIG_PATH
+    ? path.resolve(process.env.DB_CONFIG_PATH)
+    : path.join(__dirname, '.dbconfig.json');
+
+  if (fs.existsSync(configPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      return {
+        host: cfg.host || 'localhost',
+        port: Number(cfg.port) || 5432,
+        user: cfg.user || 'adempiere',
+        password: cfg.password || 'adempiere',
+        database: cfg.database || 'luis',
+        ssl: cfg.ssl ? { rejectUnauthorized: false } : false,
+      };
+    } catch {}
+  }
+
   const envPath = path.join(__dirname, '.env');
   const env = {};
   if (fs.existsSync(envPath)) {
@@ -26,18 +81,19 @@ function getDbConfig() {
     user: process.env.DB_USER || env.DB_USER || 'adempiere',
     password: process.env.DB_PASSWORD || env.DB_PASSWORD || 'adempiere',
     database: process.env.DB_DATABASE || env.DB_DATABASE || 'luis',
+    ssl: (process.env.DB_SSL || env.DB_SSL) === 'true' ? { rejectUnauthorized: false } : false,
   };
 }
 
-// Descargar HTML del BCV
-function fetchBcvHtml() {
+// Descargar HTML del BCV (intenta TLS estricto primero; si falla por cadena de certificado, reintenta)
+function requestBcvHtml(rejectUnauthorized) {
   return new Promise((resolve, reject) => {
     const options = {
       hostname: 'www.bcv.org.ve',
       port: 443,
       path: '/',
       method: 'GET',
-      rejectUnauthorized: false,
+      rejectUnauthorized,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -66,24 +122,41 @@ function fetchBcvHtml() {
   });
 }
 
-// Parsea fecha de BCV (content="YYYY-MM-DDTHH:mm:ss" o texto)
+async function fetchBcvHtml() {
+  try {
+    return await requestBcvHtml(true);
+  } catch (err) {
+    if (err && TLS_CHAIN_ERRORS.has(err.code)) {
+      console.warn(`⚠️ Error de cadena TLS en BCV (${err.code}); reintentando sin validación estricta.`);
+      return await requestBcvHtml(false);
+    }
+    throw err;
+  }
+}
+
+// Parsea fecha de BCV (content="YYYY-MM-DDTHH:mm:ss" o texto en español)
 function parseBcvDate($) {
-  // 1. Intentar por atributo content en .date-display-single
-  const contentDate = $('span.date-display-single').attr('content');
+  const contentDate =
+    $('span.date-display-single').attr('content') ||
+    $('.pull-right.dinpro span.date-display-single').attr('content');
   if (contentDate) {
     const match = contentDate.match(/^(\d{4}-\d{2}-\d{2})/);
     if (match) return match[1];
   }
 
-  // 2. Intentar buscando dentro de div.pull-right.dinpro
-  const dinproContent = $('.pull-right.dinpro span.date-display-single').attr('content');
-  if (dinproContent) {
-    const match = dinproContent.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (match) return match[1];
+  const dateText =
+    $('.diname-round .date-display-single').text().trim() ||
+    $('span.date-display-single').first().text().trim();
+  if (dateText) {
+    const match = dateText.match(/(\d{1,2})\s+([a-zA-Záéíóúñ]+)\s+(\d{4})/i);
+    if (match) {
+      const month = MONTHS_ES[match[2].toLowerCase()];
+      if (month) return `${match[3]}-${month}-${match[1].padStart(2, '0')}`;
+    }
   }
 
-  // Fallback a la fecha local de hoy en formato YYYY-MM-DD
-  return new Date().toISOString().split('T')[0];
+  // Fallback a la fecha de Venezuela (America/Caracas)
+  return getCaracasDateString();
 }
 
 async function scrapeAndSaveBcv() {

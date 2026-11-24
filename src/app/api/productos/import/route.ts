@@ -39,9 +39,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Obtener impuesto por defecto (IVA 16% o el primero disponible)
-    const impRes = await client.query('SELECT id, porcentaje FROM m_impuesto WHERE activo = true ORDER BY id ASC');
-    const defaultImpuestoId = impRes.rows.length > 0 ? impRes.rows[0].id : 1;
+    // Obtener impuestos activos para validar impuesto_id explícito o usar el predeterminado
+    const impRes = await client.query(
+      'SELECT id, porcentaje FROM m_impuesto WHERE activo = true ORDER BY id ASC'
+    );
+    const validTaxIds = new Set(impRes.rows.map((r) => Number(r.id)));
+    const defaultImpuestoId = impRes.rows.length > 0 ? Number(impRes.rows[0].id) : 1;
 
     await client.query('BEGIN');
 
@@ -56,9 +59,26 @@ export async function POST(req: Request) {
 
       const precioUsd = Math.max(0, Number(item.precio_usd) || 0);
       const stock = Math.max(0, Number(item.stock_actual) || 0);
-      const costo = Math.max(0, Number(item.costo_promedio_usd) || 0);
+      const hasExplicitCost =
+        item.costo_promedio_usd !== undefined && item.costo_promedio_usd !== null;
+      const costo = hasExplicitCost ? Math.max(0, Number(item.costo_promedio_usd) || 0) : null;
       const unidadBase = String(item.unidad_base || 'Unidad').trim() || 'Unidad';
-      const impuestoId = item.impuesto_id ? Number(item.impuesto_id) : defaultImpuestoId;
+
+      let impuestoId = defaultImpuestoId;
+      if (item.impuesto_id !== undefined && item.impuesto_id !== null) {
+        const candidateTaxId = Number(item.impuesto_id);
+        if (!Number.isInteger(candidateTaxId) || (validTaxIds.size > 0 && !validTaxIds.has(candidateTaxId))) {
+          await client.query('ROLLBACK');
+          return NextResponse.json(
+            {
+              success: false,
+              message: `El impuesto_id (${item.impuesto_id}) indicado para "${nombre}" no existe o está inactivo.`,
+            },
+            { status: 400 }
+          );
+        }
+        impuestoId = candidateTaxId;
+      }
 
       // Buscar si el producto ya existe (por nombre case-insensitive)
       const existing = await client.query(
@@ -79,9 +99,14 @@ export async function POST(req: Request) {
         productoId = existing.rows[0].id;
         await client.query(
           `UPDATE m_producto
-           SET precio_usd = $1, stock_actual = $2, unidad_base = $3, impuesto_id = COALESCE($4, impuesto_id), activo = true
-           WHERE id = $5`,
-          [precioUsd, stock, unidadBase, impuestoId, productoId]
+           SET precio_usd = $1,
+               stock_actual = $2,
+               unidad_base = $3,
+               impuesto_id = COALESCE($4, impuesto_id),
+               costo_promedio_usd = COALESCE($5, costo_promedio_usd),
+               activo = true
+           WHERE id = $6`,
+          [precioUsd, stock, unidadBase, impuestoId, costo, productoId]
         );
         actualizados++;
       } else {
@@ -89,7 +114,7 @@ export async function POST(req: Request) {
         const insertRes = await client.query(
           `INSERT INTO m_producto (nombre, precio_usd, stock_actual, costo_promedio_usd, unidad_base, impuesto_id, activo)
            VALUES ($1, $2, $3, $4, $5, $6, true) RETURNING id`,
-          [nombre, precioUsd, stock, costo, unidadBase, impuestoId]
+          [nombre, precioUsd, stock, costo ?? 0, unidadBase, impuestoId]
         );
         productoId = insertRes.rows[0].id;
         creados++;
@@ -149,11 +174,14 @@ export async function POST(req: Request) {
       },
       detalles,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK');
     console.error('Error al importar productos desde Excel:', error);
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error en la importación de productos' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error en la importación de productos',
+      },
       { status: 500 }
     );
   } finally {

@@ -11,6 +11,7 @@ export const BACKUP_TABLE_PRIORITY = [
   'm_tasa',
   'm_rol',
   'm_usuario',
+  'm_empresa',
   'm_tipopago',
   'm_banco',
   'm_cuentabancaria',

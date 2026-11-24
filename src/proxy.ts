@@ -20,6 +20,14 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Permitir lectura pública de la identidad de la tienda (para LoginModal); mutaciones requieren sesión
+  if (
+    request.method === 'GET' &&
+    (pathname === '/api/empresa' || pathname === '/api/empresa/')
+  ) {
+    return NextResponse.next();
+  }
+
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!token) {
     return NextResponse.json(
