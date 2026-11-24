@@ -8,9 +8,15 @@ interface LoginModalProps {
   isOpen: boolean;
   onLoginSuccess: (user: Usuario, mustChangePassword?: boolean) => void;
   isDarkMode?: boolean;
+  storeName?: string;
 }
 
-export default function LoginModal({ isOpen, onLoginSuccess, isDarkMode = false }: LoginModalProps) {
+export default function LoginModal({
+  isOpen,
+  onLoginSuccess,
+  isDarkMode = false,
+  storeName = 'Tienda Express',
+}: LoginModalProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -65,7 +71,7 @@ export default function LoginModal({ isOpen, onLoginSuccess, isDarkMode = false 
           <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center shadow-lg">
             <Store className="w-8 h-8 text-white" />
           </div>
-          <h2 className="text-2xl font-bold tracking-tight">Tienda Express POS</h2>
+          <h2 className="text-2xl font-bold tracking-tight">{storeName} POS</h2>
           <p className="text-xs text-indigo-100/80 mt-1">
             Inicia sesión para acceder a las funciones del sistema
           </p>

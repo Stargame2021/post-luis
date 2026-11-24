@@ -106,5 +106,10 @@ FROM (VALUES
 ) AS v(nombre, precio_usd, stock_actual, costo_promedio_usd, impuesto_id, activo)
 WHERE NOT EXISTS (SELECT 1 FROM m_producto LIMIT 1);
 
+-- 7. Identidad inicial de tienda configurable
+INSERT INTO m_empresa (id, nombre_comercial, rif, direccion, telefono, moneda_local)
+VALUES (1, 'Tienda Express', '', '', '', 'Bs.')
+ON CONFLICT (id) DO NOTHING;
+
 COMMIT;
 

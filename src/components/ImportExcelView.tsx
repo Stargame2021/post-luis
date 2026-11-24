@@ -3,6 +3,12 @@
 import { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import {
+  parseExcelImportRows,
+  groupImportRows,
+  type RowImportPreview,
+  type GroupedProductoPreview,
+} from '@/lib/excel-import';
+import {
   FileSpreadsheet,
   Upload,
   Download,
@@ -19,29 +25,6 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-interface RowImportPreview {
-  producto: string;
-  presentacion: string;
-  factor: number;
-  precio: number;
-  existencia: number;
-  esPresentacionSecundaria: boolean;
-  isValid: boolean;
-  error?: string;
-}
-
-interface GroupedProductoPreview {
-  nombre: string;
-  unidad_base: string;
-  precio_usd: number;
-  stock_actual: number;
-  presentaciones: {
-    nombre: string;
-    factor: number;
-    precio_usd: number;
-  }[];
-}
-
 interface ImportExcelViewProps {
   onImportCompleted?: () => void;
   isDarkMode?: boolean;
@@ -55,6 +38,7 @@ export default function ImportExcelView({
   const [fileName, setFileName] = useState<string>('');
   const [loadingFile, setLoadingFile] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [modo, setModo] = useState<'actualizar' | 'omitir'>('actualizar');
 
   const [rawRows, setRawRows] = useState<RowImportPreview[]>([]);
@@ -75,6 +59,7 @@ export default function ImportExcelView({
         Presentacion: 'Unidad',
         Factor: 1,
         'Precio USD': 1.0,
+        'Costo USD': 0.65,
         Existencia: 48,
       },
       {
@@ -82,6 +67,7 @@ export default function ImportExcelView({
         Presentacion: 'Sixpack',
         Factor: 6,
         'Precio USD': 5.5,
+        'Costo USD': '',
         Existencia: '',
       },
       {
@@ -89,6 +75,7 @@ export default function ImportExcelView({
         Presentacion: 'Caja 24',
         Factor: 24,
         'Precio USD': 21.0,
+        'Costo USD': '',
         Existencia: '',
       },
       {
@@ -96,6 +83,7 @@ export default function ImportExcelView({
         Presentacion: 'Unidad',
         Factor: 1,
         'Precio USD': 1.5,
+        'Costo USD': 1.0,
         Existencia: 100,
       },
       {
@@ -103,6 +91,7 @@ export default function ImportExcelView({
         Presentacion: 'Paquete',
         Factor: 1,
         'Precio USD': 1.15,
+        'Costo USD': 0.85,
         Existencia: 120,
       },
       {
@@ -110,6 +99,7 @@ export default function ImportExcelView({
         Presentacion: 'Bulto 20kg',
         Factor: 20,
         'Precio USD': 21.5,
+        'Costo USD': '',
         Existencia: '',
       },
     ];
@@ -121,6 +111,7 @@ export default function ImportExcelView({
       { wch: 18 }, // Presentacion
       { wch: 10 }, // Factor
       { wch: 14 }, // Precio USD
+      { wch: 14 }, // Costo USD
       { wch: 14 }, // Existencia
     ];
 
@@ -129,11 +120,8 @@ export default function ImportExcelView({
     XLSX.writeFile(workbook, 'plantilla_importacion_productos.xlsx');
   };
 
-  // Procesar archivo Excel cargado por el usuario
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const uploadedFile = e.target.files?.[0];
-    if (!uploadedFile) return;
-
+  // Procesar archivo Excel cargado por el usuario (selector o drag & drop)
+  const processUploadedFile = (uploadedFile: File) => {
     setLoadingFile(true);
     setResultMessage(null);
     setFile(uploadedFile);
@@ -147,7 +135,7 @@ export default function ImportExcelView({
         const workbook = XLSX.read(bstr, { type: 'binary' });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const data = XLSX.utils.sheet_to_json<any>(worksheet, { defval: '' });
+        const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' });
 
         if (data.length === 0) {
           setResultMessage({
@@ -158,143 +146,13 @@ export default function ImportExcelView({
           return;
         }
 
-        // Parsear filas y reconocer columnas con nombres flexibles
-        const parsedRows: RowImportPreview[] = data
-          .map((row) => {
-            // Reconocimiento flexible de nombres de columna
-            const prodRaw =
-              row.Producto ||
-              row.producto ||
-              row.PRODUCTO ||
-              row.Articulo ||
-              row.articulo ||
-              row.Nombre ||
-              row.nombre ||
-              '';
-            const presRaw =
-              row.Presentacion ||
-              row.presentacion ||
-              row.PRESENTACION ||
-              row.Empaque ||
-              row.empaque ||
-              row.Unidad ||
-              '';
-            const factorRaw =
-              row.Factor ||
-              row.factor ||
-              row.FACTOR ||
-              row['Unidades por Empaque'] ||
-              row['Cantidad Empaque'] ||
-              '';
-            const precioRaw =
-              row['Precio USD'] ||
-              row.Precio ||
-              row.precio ||
-              row.PRECIO ||
-              row.PVP ||
-              row['Precio'] ||
-              0;
-            const stockRaw =
-              row.Existencia ||
-              row.existencia ||
-              row.EXISTENCIA ||
-              row.Stock ||
-              row.stock ||
-              row.Cantidad ||
-              '';
-
-            const producto = String(prodRaw).trim();
-            if (!producto) return null; // saltar filas vacías
-
-            let presentacion = String(presRaw).trim();
-            let factor = parseFloat(String(factorRaw)) || 1;
-            const precio = parseFloat(String(precioRaw)) || 0;
-            const existencia = parseFloat(String(stockRaw)) || 0;
-
-            // Limpiar paréntesis si el usuario escribió "(unidad)" o "(sixpack)"
-            presentacion = presentacion.replace(/^\(|\)$/g, '').trim();
-
-            // Si no indicó presentación, por defecto es Unidad
-            if (!presentacion) {
-              presentacion = 'Unidad';
-            }
-
-            // Detección automática inteligente si el factor no vino en el excel
-            if (factor <= 1) {
-              const lowerPres = presentacion.toLowerCase();
-              if (lowerPres.includes('sixpack') || lowerPres.includes('six pack')) {
-                factor = 6;
-              } else if (lowerPres.includes('doce') || lowerPres.includes('docena')) {
-                factor = 12;
-              } else {
-                // Buscar si hay números en el nombre de la presentación (ej: "Caja 24" -> 24)
-                const numMatch = lowerPres.match(/\d+/);
-                if (numMatch && numMatch[0]) {
-                  const detectedNum = parseInt(numMatch[0], 10);
-                  if (detectedNum > 1 && detectedNum <= 1000) {
-                    factor = detectedNum;
-                  }
-                }
-              }
-            }
-
-            const esPresentacionSecundaria = factor > 1;
-
-            return {
-              producto,
-              presentacion,
-              factor,
-              precio,
-              existencia,
-              esPresentacionSecundaria,
-              isValid: precio >= 0,
-            };
-          })
-          .filter(Boolean) as RowImportPreview[];
-
+        const parsedRows = parseExcelImportRows(data);
         setRawRows(parsedRows);
-
-        // Agrupar filas por Producto base y coleccionar sus presentaciones
-        const groupedMap = new Map<string, GroupedProductoPreview>();
-
-        for (const r of parsedRows) {
-          const key = r.producto.toLowerCase();
-          const existing = groupedMap.get(key);
-
-          if (!existing) {
-            // Primer registro de este producto: se toma como unidad base
-            groupedMap.set(key, {
-              nombre: r.producto,
-              unidad_base: r.presentacion || 'Unidad',
-              precio_usd: r.precio,
-              stock_actual: r.existencia,
-              presentaciones: [],
-            });
-          } else {
-            // Siguientes registros del mismo producto:
-            // Si el nombre de la presentación coincide con la unidad base ya guardada, actualiza precio o stock
-            if (r.presentacion.toLowerCase() === existing.unidad_base.toLowerCase()) {
-              existing.precio_usd = r.precio;
-              if (r.existencia > 0) {
-                existing.stock_actual = r.existencia;
-              }
-            } else {
-              // Si es otra presentación (incluso con factor 1 como "Unidad Especial"), se agrega como presentación adicional
-              existing.presentaciones.push({
-                nombre: r.presentacion,
-                factor: r.factor,
-                precio_usd: r.precio,
-              });
-            }
-          }
-        }
-
-        const groupedList = Array.from(groupedMap.values());
-        setGroupedProducts(groupedList);
-      } catch (err: any) {
+        setGroupedProducts(groupImportRows(parsedRows));
+      } catch (err: unknown) {
         setResultMessage({
           type: 'error',
-          text: `No se pudo leer el archivo Excel: ${err?.message || 'Formato no soportado'}`,
+          text: `No se pudo leer el archivo Excel: ${err instanceof Error ? err.message : 'Formato no soportado'}`,
         });
       } finally {
         setLoadingFile(false);
@@ -304,9 +162,18 @@ export default function ImportExcelView({
     reader.readAsBinaryString(uploadedFile);
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const uploadedFile = e.target.files?.[0];
+    if (!uploadedFile) return;
+    processUploadedFile(uploadedFile);
+  };
+
+  const invalidRowsCount = rawRows.filter((r) => !r.isValid).length;
+  const hasInvalidRows = invalidRowsCount > 0;
+
   // Confirmar y procesar importación en la base de datos
   const handleConfirmImport = async () => {
-    if (groupedProducts.length === 0) return;
+    if (groupedProducts.length === 0 || hasInvalidRows) return;
 
     setImporting(true);
     setResultMessage(null);
@@ -466,7 +333,22 @@ export default function ImportExcelView({
         {!file ? (
           <label
             htmlFor="excel-file-input"
-            className="cursor-pointer flex flex-col items-center justify-center p-8 border-2 border-dashed border-indigo-400/40 hover:border-indigo-500 rounded-3xl transition group bg-indigo-50/20 dark:bg-indigo-950/10"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+              const dropped = e.dataTransfer.files?.[0];
+              if (dropped) processUploadedFile(dropped);
+            }}
+            className={`cursor-pointer flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-3xl transition group ${
+              isDragging
+                ? 'border-indigo-500 bg-indigo-500/10'
+                : 'border-indigo-400/40 hover:border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/10'
+            }`}
           >
             <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-4 group-hover:scale-110 transition shadow-inner">
               <Upload className="w-8 h-8" />
@@ -554,13 +436,19 @@ export default function ImportExcelView({
               <button
                 type="button"
                 onClick={handleConfirmImport}
-                disabled={importing}
-                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md shadow-indigo-600/25 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                disabled={importing || hasInvalidRows}
+                title={hasInvalidRows ? 'Corrige las filas inválidas antes de importar' : undefined}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md shadow-indigo-600/25 transition flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {importing ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>Guardando en BD...</span>
+                  </>
+                ) : hasInvalidRows ? (
+                  <>
+                    <AlertCircle className="w-4 h-4" />
+                    <span>{invalidRowsCount} fila(s) inválida(s)</span>
                   </>
                 ) : (
                   <>

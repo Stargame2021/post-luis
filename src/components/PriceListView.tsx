@@ -607,11 +607,15 @@ export default function PriceListView({
                               {item.product.nombre}
                             </h5>
 
-                            {/* Selector o Píldoras de presentación directa por fila */}
+                            {/* Selector o Píldoras de presentación directa por fila (precios con IVA) */}
                             {opciones.length > 1 ? (
-                              <div className="flex items-center gap-1 mt-1">
+                              <div className="flex flex-wrap items-center gap-1 mt-1">
                                 {opciones.map((opc, opcIdx) => {
                                   const isCurrent = item.opcion.id === opc.id;
+                                  const rawPct = item.product.impuesto_porcentaje;
+                                  const itemTaxPct =
+                                    rawPct !== undefined && rawPct !== null ? Number(rawPct) : 16;
+                                  const opcFinalUsd = opc.precio_usd * (1 + itemTaxPct / 100);
                                   return (
                                     <button
                                       key={opcIdx}
@@ -625,14 +629,14 @@ export default function PriceListView({
                                           : 'bg-white text-slate-600 border-slate-300 hover:border-indigo-300'
                                       }`}
                                     >
-                                      {opc.nombre} (${opc.precio_usd.toFixed(2)})
+                                      {opc.nombre} (${opcFinalUsd.toFixed(2)})
                                     </button>
                                   );
                                 })}
                               </div>
                             ) : (
                               <span className="text-[10px] font-medium text-slate-400">
-                                {item.opcion.nombre} · ${item.unitPriceUsd.toFixed(2)} c/u
+                                {item.opcion.nombre} · ${(item.unitPriceUsd * (1 + item.taxRate / 100)).toFixed(2)} c/IVA
                               </span>
                             )}
                           </div>

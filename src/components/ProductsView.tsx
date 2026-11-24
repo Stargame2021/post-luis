@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Producto, Impuesto, Presentacion } from '@/types';
 import { formatStockDesglose, formatStockDesgloseCompleto, getOpcionesUnidad, getSegmentacionExistencias } from '@/lib/unidades';
+import { calculateBaseFromFinalPrice } from '@/lib/excel-import';
 import PosNumberInput from '@/components/PosNumberInput';
 import {
   Package,
@@ -52,6 +53,8 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
   });
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [pvpFinalDraft, setPvpFinalDraft] = useState<number | null>(null);
+  const [presPvpDrafts, setPresPvpDrafts] = useState<Record<number, number | null>>({});
 
   // Fetch taxes list for the dropdown
   useEffect(() => {
@@ -85,12 +88,16 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
       presentaciones: [],
       activo: true,
     });
+    setPvpFinalDraft(null);
+    setPresPvpDrafts({});
     setErrorMsg('');
     setShowModal(true);
   };
 
   const handleOpenEdit = (p: Producto) => {
     setEditingProduct(p);
+    setPvpFinalDraft(null);
+    setPresPvpDrafts({});
     setFormData({
       nombre: p.nombre,
       precio_usd: String(p.precio_usd),
@@ -374,7 +381,7 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                                 (Total: {stockNum} {unidadBase}s)
                               </p>
                               <div className="flex flex-wrap items-center justify-center gap-1 mt-1 max-w-[240px]">
-                                {segmentaciones.filter((s) => s.factor > 1).map((s) => (
+                                {segmentaciones.filter((s) => s.id !== null).map((s) => (
                                   <span
                                     key={s.id ?? 'base'}
                                     className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 font-mono"
@@ -496,8 +503,11 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                     <DollarSign className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <PosNumberInput
                       value={formData.precio_usd}
-                      onChange={(val) => setFormData({ ...formData, precio_usd: String(val) })}
-                      decimals={2}
+                      onChange={(val) => {
+                        setPvpFinalDraft(null);
+                        setFormData({ ...formData, precio_usd: String(val) });
+                      }}
+                      decimals={4}
                       className={`w-full pl-9 pr-3 py-2 rounded-xl border text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
                         isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
                       }`}
@@ -508,7 +518,7 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                   </p>
                 </div>
 
-                {/* Campo Editable: PVP Final (calcula automáticamente el precio base) */}
+                {/* Campo Editable: PVP Final (calcula automáticamente el precio base a 4 decimales sin saltos) */}
                 <div>
                   {(() => {
                     const selTax = taxes.find((t) => t.id === Number(formData.impuesto_id));
@@ -524,12 +534,14 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                         <div className="relative">
                           <DollarSign className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500" />
                           <PosNumberInput
-                            value={finalUsd}
+                            value={pvpFinalDraft ?? finalUsd}
                             onChange={(finalVal) => {
                               const fVal = Number(finalVal) || 0;
-                              const newBase = pct > 0 ? fVal / (1 + pct / 100) : fVal;
-                              setFormData({ ...formData, precio_usd: newBase.toFixed(2) });
+                              setPvpFinalDraft(fVal);
+                              const newBase = calculateBaseFromFinalPrice(fVal, pct);
+                              setFormData({ ...formData, precio_usd: String(newBase) });
                             }}
+                            onBlur={() => setPvpFinalDraft(null)}
                             decimals={2}
                             className={`w-full pl-9 pr-3 py-2 rounded-xl border text-sm font-mono font-bold text-emerald-600 dark:text-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${
                               isDarkMode ? 'bg-slate-800 border-emerald-500/40' : 'bg-emerald-50/40 border-emerald-300'
@@ -550,7 +562,11 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                   </label>
                   <select
                     value={formData.impuesto_id}
-                    onChange={(e) => setFormData({ ...formData, impuesto_id: Number(e.target.value) })}
+                    onChange={(e) => {
+                      setPvpFinalDraft(null);
+                      setPresPvpDrafts({});
+                      setFormData({ ...formData, impuesto_id: Number(e.target.value) });
+                    }}
                     className={`w-full px-3 py-2 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
                       isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
                     }`}
@@ -640,8 +656,11 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                             <DollarSign className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                             <PosNumberInput
                               value={pr.precio_usd}
-                              onChange={(val) => handleUpdatePresentationRow(index, 'precio_usd', String(val))}
-                              decimals={2}
+                              onChange={(val) => {
+                                setPresPvpDrafts((prev) => ({ ...prev, [index]: null }));
+                                handleUpdatePresentationRow(index, 'precio_usd', String(val));
+                              }}
+                              decimals={4}
                               className={`w-full pl-7 pr-3 py-1.5 rounded-xl border text-xs font-mono font-bold text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
                                 isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'
                               }`}
@@ -651,12 +670,16 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
                           <div className="col-span-3 relative">
                             <DollarSign className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-emerald-500" />
                             <PosNumberInput
-                              value={finalUsd}
+                              value={presPvpDrafts[index] ?? finalUsd}
                               onChange={(val) => {
                                 const fVal = Number(val) || 0;
-                                const newBase = pct > 0 ? fVal / (1 + pct / 100) : fVal;
-                                handleUpdatePresentationRow(index, 'precio_usd', newBase.toFixed(2));
+                                setPresPvpDrafts((prev) => ({ ...prev, [index]: fVal }));
+                                const newBase = calculateBaseFromFinalPrice(fVal, pct);
+                                handleUpdatePresentationRow(index, 'precio_usd', String(newBase));
                               }}
+                              onBlur={() =>
+                                setPresPvpDrafts((prev) => ({ ...prev, [index]: null }))
+                              }
                               decimals={2}
                               className={`w-full pl-7 pr-3 py-1.5 rounded-xl border text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 ${
                                 isDarkMode ? 'bg-emerald-950/20 border-emerald-900/50' : 'bg-emerald-50/60 border-emerald-200'

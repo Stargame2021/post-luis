@@ -20,9 +20,14 @@ import {
 interface OrdersViewProps {
   isDarkMode?: boolean;
   onRefreshProducts?: () => void;
+  storeName?: string;
 }
 
-export default function OrdersView({ isDarkMode = false, onRefreshProducts }: OrdersViewProps) {
+export default function OrdersView({
+  isDarkMode = false,
+  onRefreshProducts,
+  storeName = 'Tienda Express',
+}: OrdersViewProps) {
   const [orders, setOrders] = useState<Pedido[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -811,10 +816,21 @@ export default function OrdersView({ isDarkMode = false, onRefreshProducts }: Or
                       {selectedOrder.lineas?.map((line, idx) => (
                         <tr key={idx}>
                           <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-white">
-                            {line.producto_nombre}
+                            <div>{line.producto_nombre}</div>
+                            {(line.presentacion_nombre || line.cantidad_base) && (
+                              <div className="text-[10px] text-slate-400 font-mono">
+                                {line.presentacion_nombre || 'Unidad'}
+                                {line.cantidad_base && Number(line.cantidad_base) !== Number(line.cantidad)
+                                  ? ` · Descuenta ${line.cantidad_base} base`
+                                  : ''}
+                              </div>
+                            )}
                           </td>
                           <td className="py-2.5 px-3 text-center font-mono">
-                            {line.cantidad}
+                            <span className="font-bold">{line.cantidad}</span>{' '}
+                            <span className="text-[10px] text-slate-400">
+                              {line.presentacion_nombre || 'Unid'}
+                            </span>
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono">
                             ${Number(line.precio_unitario_usd).toFixed(2)}
@@ -871,7 +887,7 @@ export default function OrdersView({ isDarkMode = false, onRefreshProducts }: Or
             <div className={`px-6 py-3 border-t flex justify-between items-center ${
               isDarkMode ? 'border-slate-800 bg-slate-950/40' : 'border-slate-100 bg-slate-50'
             }`}>
-              <div>
+              <div className="flex items-center gap-2">
                 {selectedOrder.estado !== 'ANULADO' && (
                   <button
                     onClick={() => {
@@ -885,6 +901,19 @@ export default function OrdersView({ isDarkMode = false, onRefreshProducts }: Or
                     Anular Pedido
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  title={`Imprimir comprobante (${storeName})`}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 ${
+                    isDarkMode
+                      ? 'border-slate-700 text-slate-200 hover:bg-slate-800'
+                      : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <Receipt className="w-3.5 h-3.5" />
+                  Reimprimir ({storeName})
+                </button>
               </div>
 
               <button

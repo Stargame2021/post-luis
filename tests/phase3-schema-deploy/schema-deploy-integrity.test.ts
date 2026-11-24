@@ -119,9 +119,9 @@ beforeEach(() => {
 });
 
 describe('1. Fuente única SQL (sql/01_tablas.sql + sql/02_datos_iniciales.sql)', () => {
-  it('01_tablas.sql define las 16 tablas canónicas y los 31 índices esperados', () => {
+  it('01_tablas.sql define las 17 tablas canónicas y los 31 índices esperados', () => {
     const tablesSql = loadCanonicalSqlFile('01_tablas.sql');
-    expect(BACKUP_TABLE_PRIORITY).toHaveLength(16);
+    expect(BACKUP_TABLE_PRIORITY).toHaveLength(17);
 
     for (const table of BACKUP_TABLE_PRIORITY) {
       expect(tablesSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { requireAuth } from '@/lib/api-auth';
 import { hasAnyPermission } from '@/lib/permissions';
+import { getCaracasDayRangeIso, getCaracasMonthBounds } from '@/lib/bcv';
 
 export async function GET(req: Request) {
   const auth = await requireAuth(req, { permissions: ['reports', 'reports_profit'] });
@@ -20,19 +21,14 @@ export async function GET(req: Request) {
       );
     }
     
-    // Default dates: current month (from 1st day of month to today)
-    const now = new Date();
-    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-      .toISOString()
-      .split('T')[0];
-    const today = now.toISOString().split('T')[0];
+    // Default dates in America/Caracas timezone (current month from day 1 to today)
+    const { firstDayOfMonth, today } = getCaracasMonthBounds();
 
     const fechaDesde = searchParams.get('desde') || firstDayOfMonth;
     const fechaHasta = searchParams.get('hasta') || today;
 
-    // Convert to start of day and end of day in ISO
-    const startIso = `${fechaDesde}T00:00:00.000Z`;
-    const endIso = `${fechaHasta}T23:59:59.999Z`;
+    // Convert to start and end of day in America/Caracas (-04:00)
+    const { startIso, endIso } = getCaracasDayRangeIso(fechaDesde, fechaHasta);
 
     // ==========================================
     // 1. REPORTE DE VENTAS POR RANGO DE FECHA
@@ -103,11 +99,11 @@ export async function GET(req: Request) {
     const ticketPromedioUsd = cantidadPedidos > 0 ? totalVentasUsd / cantidadPedidos : 0;
     const totalUnidadesVendidas = salesRows.reduce((acc, row) => acc + Number(row.total_unidades || 0), 0);
 
-    // Desglose diario para gráfico de ventas
+    // Desglose diario para gráfico de ventas (en zona horaria America/Caracas)
     const dailyBreakdownQuery = `
       SELECT 
-        TO_CHAR(p.fecha_hora, 'YYYY-MM-DD') as fecha,
-        TO_CHAR(p.fecha_hora, 'Dy DD Mon') as etiqueta,
+        TO_CHAR(p.fecha_hora AT TIME ZONE 'America/Caracas', 'YYYY-MM-DD') as fecha,
+        TO_CHAR(p.fecha_hora AT TIME ZONE 'America/Caracas', 'Dy DD Mon') as etiqueta,
         COUNT(p.id)::int as cantidad_ventas,
         COALESCE(SUM(p.total_usd), 0)::numeric as total_usd,
         COALESCE(SUM(p.total_moneda_local), 0)::numeric as total_local
@@ -115,7 +111,8 @@ export async function GET(req: Request) {
       WHERE p.estado = 'COMPLETADO'
         AND p.fecha_hora >= $1 
         AND p.fecha_hora <= $2
-      GROUP BY TO_CHAR(p.fecha_hora, 'YYYY-MM-DD'), TO_CHAR(p.fecha_hora, 'Dy DD Mon')
+      GROUP BY TO_CHAR(p.fecha_hora AT TIME ZONE 'America/Caracas', 'YYYY-MM-DD'),
+               TO_CHAR(p.fecha_hora AT TIME ZONE 'America/Caracas', 'Dy DD Mon')
       ORDER BY fecha ASC
     `;
     const dailyBreakdown = await query(dailyBreakdownQuery, [startIso, endIso]);
@@ -159,44 +156,22 @@ export async function GET(req: Request) {
       const productMap = new Map<number, any>();
       allProducts.forEach((p) => productMap.set(p.id, p));
 
-      // B) Todos los lotes de compra completados en orden histórico (convertidos a unidad base)
-      let purchaseBatches: any[] = [];
-      try {
-        purchaseBatches = await query(`
-          SELECT 
-            cl.id as linea_id,
-            c.id as compra_id,
-            c.numero_factura,
-            c.fecha_emision,
-            c.creado_en,
-            cl.producto_id,
-            COALESCE(cl.cantidad_base, cl.cantidad)::numeric as cantidad,
-            (cl.costo_unitario_usd / COALESCE(cl.factor_conversion, 1))::numeric as costo_unitario_usd
-          FROM t_compra c
-          JOIN t_compralinea cl ON cl.compra_id = c.id
-          WHERE COALESCE(c.estado, 'COMPLETADO') != 'ANULADO'
-          ORDER BY c.fecha_emision ASC, c.id ASC, cl.id ASC
-        `);
-      } catch {
-        try {
-          purchaseBatches = await query(`
-            SELECT 
-              cl.id as linea_id,
-              c.id as compra_id,
-              c.numero_factura,
-              c.fecha_emision,
-              c.creado_en,
-              cl.producto_id,
-              COALESCE(cl.cantidad_base, cl.cantidad)::numeric as cantidad,
-              (cl.costo_unitario_usd / COALESCE(cl.factor_conversion, 1))::numeric as costo_unitario_usd
-            FROM t_compra c
-            JOIN t_compralinea cl ON cl.compra_id = c.id
-            ORDER BY c.fecha_emision ASC, c.id ASC, cl.id ASC
-          `);
-        } catch (err) {
-          console.error('Error al consultar lotes de compras FIFO:', err);
-        }
-      }
+      // B) Solo lotes de compra COMPLETADO en orden histórico (excluye ANULADO y borradores PROCESO)
+      const purchaseBatches = await query(`
+        SELECT 
+          cl.id as linea_id,
+          c.id as compra_id,
+          c.numero_factura,
+          c.fecha_emision,
+          c.creado_en,
+          cl.producto_id,
+          COALESCE(cl.cantidad_base, cl.cantidad)::numeric as cantidad,
+          (cl.costo_unitario_usd / COALESCE(cl.factor_conversion, 1))::numeric as costo_unitario_usd
+        FROM t_compra c
+        JOIN t_compralinea cl ON cl.compra_id = c.id
+        WHERE COALESCE(c.estado, 'COMPLETADO') = 'COMPLETADO'
+        ORDER BY c.fecha_emision ASC, c.id ASC, cl.id ASC
+      `);
 
       // Estructura de inventario FIFO disponible por producto
       const fifoInventory = new Map<number, {
@@ -345,10 +320,12 @@ export async function GET(req: Request) {
         });
       }
 
-      // Ahora filtramos las ventas procesadas por el rango de fecha solicitado
+      // Ahora filtramos las ventas procesadas por el rango de fecha en America/Caracas
+      const startMs = new Date(startIso).getTime();
+      const endMs = new Date(endIso).getTime();
       const filteredFifoSales = processedFifoSales.filter((s) => {
-        const saleDate = new Date(s.fecha_hora).toISOString();
-        return saleDate >= startIso && saleDate <= endIso;
+        const saleMs = new Date(s.fecha_hora).getTime();
+        return saleMs >= startMs && saleMs <= endMs;
       });
 
       // Agrupación de Rentabilidad por Producto en el período

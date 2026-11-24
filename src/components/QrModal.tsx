@@ -12,7 +12,7 @@ interface QrModalProps {
 
 export default function QrModal({ isOpen, onClose, isDarkMode = false }: QrModalProps) {
   const [copied, setCopied] = useState(false);
-  const [hostIp, setHostIp] = useState('192.168.1.7');
+  const [hostIp, setHostIp] = useState('');
   const [port, setPort] = useState('3000');
   const [isEditingIp, setIsEditingIp] = useState(false);
 
@@ -28,7 +28,7 @@ export default function QrModal({ isOpen, onClose, isDarkMode = false }: QrModal
         return;
       }
 
-      // If already accessed via LAN IP (e.g. http://192.168.1.7:3000)
+      // If already accessed via LAN IP (e.g. http://192.168.1.x:3000)
       const hostname = window.location.hostname;
       if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1' && !hostname.startsWith('172.')) {
         setHostIp(hostname);
@@ -42,25 +42,42 @@ export default function QrModal({ isOpen, onClose, isDarkMode = false }: QrModal
           if (data.success && data.ip && !data.ip.startsWith('172.') && data.ip !== 'localhost') {
             setHostIp(data.ip);
           } else {
-            // Default detected LAN IP for this machine
-            setHostIp('192.168.1.7');
+            setHostIp(hostname || '');
+            setIsEditingIp(true);
           }
         })
         .catch(() => {
-          setHostIp('192.168.1.7');
+          setHostIp(hostname || '');
+          setIsEditingIp(true);
         });
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const mobileUrl = `http://${hostIp}${port ? `:${port}` : ''}`;
+  const mobileUrl = hostIp ? `http://${hostIp}${port ? `:${port}` : ''}` : '';
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!mobileUrl) return;
-    navigator.clipboard.writeText(mobileUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(mobileUrl);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = mobileUrl;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setIsEditingIp(true);
+    }
   };
 
   const handleIpChange = (newIp: string) => {
@@ -148,7 +165,7 @@ export default function QrModal({ isOpen, onClose, isDarkMode = false }: QrModal
                   type="text"
                   value={hostIp}
                   onChange={(e) => handleIpChange(e.target.value)}
-                  placeholder="Ej. 192.168.1.7"
+                  placeholder="Ej. 192.168.1.x"
                   className={`w-full px-2 py-1 rounded-lg border text-xs font-mono font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
                     isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800'
                   }`}

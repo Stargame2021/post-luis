@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 
 /**
  * Formatea un valor numérico a moneda / número en formato POS en español (VE / ES)
@@ -27,18 +27,24 @@ export interface PosNumberInputProps
   extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> {
   value: number | string;
   onChange: (value: number) => void;
-  decimals?: number; // Por defecto 2 (centavos), o 4 para tasas
+  decimals?: number;
   min?: number;
   max?: number;
   placeholder?: string;
   className?: string;
 }
 
+function clampNumericValue(num: number, min: number, max?: number): number {
+  let result = Number.isFinite(num) ? num : min;
+  if (result < min) result = min;
+  if (max !== undefined && result > max) result = max;
+  return result;
+}
+
 /**
- * Componente de entrada numérica estilo Punto de Venta (POS):
- * - Comienza en 0,00
- * - Cada dígito ingresado desplaza los números hacia la izquierda (multiplica por 10 y suma el nuevo dígito en los centavos).
- * - Backspace / Borrar desplaza los números hacia la derecha (divide entre 10).
+ * Entrada numérica decimal compatible con teclado físico y teclados móviles (Android/iOS):
+ * - Usa inputMode="decimal" y onChange (evita depender de e.key === 'Unidentified' en móvil).
+ * - Respeta min y max al salir de foco o al editar.
  */
 export default function PosNumberInput({
   value,
@@ -50,92 +56,79 @@ export default function PosNumberInput({
   placeholder,
   disabled,
   readOnly,
+  onBlur,
+  onFocus,
   ...rest
 }: PosNumberInputProps) {
-  // Mantener los dígitos brutos (entero en centavos)
-  const factor = Math.pow(10, decimals);
+  const [isFocused, setIsFocused] = useState(false);
+  const [draft, setDraft] = useState('');
 
-  const getCentsFromValue = (v: number | string): number => {
-    const num = typeof v === 'number' ? v : parseFloat(String(v || 0));
-    if (isNaN(num)) return 0;
-    return Math.round(Math.abs(num) * factor);
-  };
+  const numericValue =
+    typeof value === 'number' ? value : parseFloat(String(value || 0).replace(',', '.'));
+  const safeValue = Number.isFinite(numericValue) ? numericValue : 0;
 
-  const [digits, setDigits] = useState<number>(() => getCentsFromValue(value));
-  const isInternalChange = useRef(false);
-
-  // Sincronizar si cambia el valor externamente
-  useEffect(() => {
-    if (isInternalChange.current) {
-      isInternalChange.current = false;
-      return;
-    }
-    setDigits(getCentsFromValue(value));
-  }, [value, decimals]);
-
-  const displayString = (digits / factor).toLocaleString('es-VE', {
+  const formattedDisplay = safeValue.toLocaleString('es-VE', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+    setIsFocused(true);
+    setDraft(safeValue === 0 ? '' : String(Number(safeValue.toFixed(decimals))));
+    onFocus?.(e);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (disabled || readOnly) return;
 
-    // Permitir teclas de navegación habituales
-    if (['Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(e.key)) {
+    const raw = e.target.value.replace(',', '.');
+    // Permitir vacío o dígitos con a lo sumo un punto decimal
+    const sanitized = raw.replace(/[^0-9.]/g, '');
+    const parts = sanitized.split('.');
+    const normalized =
+      parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : sanitized;
+
+    setDraft(normalized);
+
+    if (normalized === '' || normalized === '.') {
+      onChange(clampNumericValue(0, min, max));
       return;
     }
 
-    // Manejo de Backspace o Delete: desplazar a la derecha (eliminar último dígito)
-    if (e.key === 'Backspace' || e.key === 'Delete') {
-      e.preventDefault();
-      const nextDigits = Math.floor(digits / 10);
-      setDigits(nextDigits);
-      const nextVal = nextDigits / factor;
-      isInternalChange.current = true;
-      onChange(nextVal);
-      return;
-    }
-
-    // Tecla 'Escape' o selección completa para limpiar
-    if (e.ctrlKey || e.metaKey) {
-      return;
-    }
-
-    // Si es un número (0 al 9)
-    if (/^[0-9]$/.test(e.key)) {
-      e.preventDefault();
-      const digitNum = parseInt(e.key, 10);
-      const nextDigits = digits * 10 + digitNum;
-      const nextVal = nextDigits / factor;
-
-      if (max !== undefined && nextVal > max) {
+    const parsed = parseFloat(normalized);
+    if (!isNaN(parsed)) {
+      if (max !== undefined && parsed > max) {
+        setDraft(String(max));
+        onChange(max);
         return;
       }
-
-      setDigits(nextDigits);
-      isInternalChange.current = true;
-      onChange(nextVal);
-      return;
+      onChange(Number(parsed.toFixed(decimals)));
     }
+  };
 
-    // Bloquear cualquier otra tecla (letras, comas, puntos directos ya que se maneja por desplazamiento)
-    e.preventDefault();
+  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    setIsFocused(false);
+    const parsed = parseFloat(draft.replace(',', '.'));
+    const clamped = clampNumericValue(isNaN(parsed) ? safeValue : parsed, min, max);
+    if (clamped !== safeValue) {
+      onChange(Number(clamped.toFixed(decimals)));
+    }
+    onBlur?.(e);
   };
 
   return (
     <input
       type="text"
-      inputMode="numeric"
-      value={displayString}
-      onKeyDown={handleKeyDown}
-      onChange={() => {}} // Manejado por onKeyDown para garantizar precisión de desplazamiento
+      inputMode="decimal"
+      value={isFocused ? draft : formattedDisplay}
+      onFocus={handleFocus}
+      onChange={handleChange}
+      onBlur={handleBlur}
       disabled={disabled}
       readOnly={readOnly}
       className={className}
-      placeholder={placeholder || displayString}
+      placeholder={placeholder || formattedDisplay}
       {...rest}
     />
   );
 }
-

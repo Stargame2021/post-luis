@@ -224,6 +224,17 @@ CREATE TABLE IF NOT EXISTS t_pago_documento (
     creado_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 13. Tabla de Identidad / Configuración de la Tienda (m_empresa)
+CREATE TABLE IF NOT EXISTS m_empresa (
+    id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    nombre_comercial VARCHAR(150) NOT NULL DEFAULT 'Tienda Express',
+    rif VARCHAR(50),
+    direccion TEXT,
+    telefono VARCHAR(50),
+    moneda_local VARCHAR(10) NOT NULL DEFAULT 'Bs.',
+    actualizado_en TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ==============================================================================
 -- ÍNDICES DE RENDIMIENTO
 -- ==============================================================================

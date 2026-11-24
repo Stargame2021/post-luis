@@ -124,9 +124,12 @@ export async function GET(req: Request) {
 
     const rows = await query(sql);
     return NextResponse.json({ success: true, products: rows });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al listar productos' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al listar productos',
+      },
       { status: 500 }
     );
   }
@@ -184,10 +187,13 @@ export async function POST(req: Request) {
     await client.query('COMMIT');
 
     return NextResponse.json({ success: true, product: await fetchProduct(newId) });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK').catch(() => {});
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al crear producto' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al crear producto',
+      },
       { status: 500 }
     );
   } finally {
@@ -223,20 +229,48 @@ export async function PUT(req: Request) {
     }
 
     const price = Number(precio_usd);
-    const stock = stock_actual !== undefined ? Number(stock_actual) : 0;
-    const costo = costo_promedio_usd !== undefined ? Number(costo_promedio_usd) : 0;
-    const taxId = impuesto_id ? Number(impuesto_id) : 1;
-    const unidad = String(unidad_base || 'Unidad').trim() || 'Unidad';
+    if (!Number.isFinite(price) || price < 0) {
+      return NextResponse.json(
+        { success: false, message: 'El precio en USD debe ser mayor o igual a 0' },
+        { status: 400 }
+      );
+    }
+
+    const stock =
+      stock_actual !== undefined && stock_actual !== null ? Number(stock_actual) : null;
+    const costo =
+      costo_promedio_usd !== undefined && costo_promedio_usd !== null
+        ? Number(costo_promedio_usd)
+        : null;
+    const taxId = impuesto_id ? Number(impuesto_id) : null;
+    const unidad =
+      unidad_base !== undefined && unidad_base !== null
+        ? String(unidad_base).trim() || 'Unidad'
+        : null;
     const presList = presentaciones !== undefined ? parsePresentaciones(presentaciones) : null;
 
     await client.query('BEGIN');
     const rows = await client.query(
       `UPDATE m_producto 
-       SET nombre = $1, precio_usd = $2, stock_actual = $3, costo_promedio_usd = $4, impuesto_id = $5, activo = $6,
-           unidad_base = $7
+       SET nombre = $1,
+           precio_usd = $2,
+           stock_actual = COALESCE($3, stock_actual),
+           costo_promedio_usd = COALESCE($4, costo_promedio_usd),
+           impuesto_id = COALESCE($5, impuesto_id),
+           activo = COALESCE($6, activo),
+           unidad_base = COALESCE($7, unidad_base)
        WHERE id = $8
        RETURNING id`,
-      [String(nombre).trim(), price, stock, costo, taxId, Boolean(activo), unidad, Number(id)]
+      [
+        String(nombre).trim(),
+        price,
+        stock,
+        costo,
+        taxId,
+        activo !== undefined && activo !== null ? Boolean(activo) : null,
+        unidad,
+        Number(id),
+      ]
     );
 
     if (rows.rows.length === 0) {
@@ -250,10 +284,13 @@ export async function PUT(req: Request) {
     await client.query('COMMIT');
 
     return NextResponse.json({ success: true, product: await fetchProduct(Number(id)) });
-  } catch (error: any) {
+  } catch (error: unknown) {
     await client.query('ROLLBACK').catch(() => {});
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al actualizar producto' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al actualizar producto',
+      },
       { status: 500 }
     );
   } finally {
@@ -294,9 +331,12 @@ export async function DELETE(req: Request) {
 
     await query('DELETE FROM m_producto WHERE id = $1', [prodId]);
     return NextResponse.json({ success: true, message: 'Producto eliminado correctamente' });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al eliminar producto' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al eliminar producto',
+      },
       { status: 500 }
     );
   }

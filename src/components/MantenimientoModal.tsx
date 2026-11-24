@@ -68,6 +68,14 @@ function MantenimientoModalContent({
   const [confirmPhrase, setConfirmPhrase] = useState('');
   const [downloadingBackup, setDownloadingBackup] = useState(false);
 
+  // Store identity form
+  const [empresaNombre, setEmpresaNombre] = useState('Tienda Express');
+  const [empresaRif, setEmpresaRif] = useState('');
+  const [empresaTelefono, setEmpresaTelefono] = useState('');
+  const [empresaDireccion, setEmpresaDireccion] = useState('');
+  const [savingEmpresa, setSavingEmpresa] = useState(false);
+  const [empresaMsg, setEmpresaMsg] = useState<string | null>(null);
+
   const handleDownloadBackup = () => {
     setDownloadingBackup(true);
     window.location.href = '/api/respaldo';
@@ -94,10 +102,20 @@ function MantenimientoModalContent({
     let active = true;
     const loadInitialStats = async () => {
       try {
-        const res = await fetch('/api/mantenimiento');
-        const data = await res.json();
+        const [maintRes, empRes] = await Promise.all([
+          fetch('/api/mantenimiento'),
+          fetch('/api/empresa'),
+        ]);
+        const data = await maintRes.json();
+        const empData = await empRes.json();
         if (active && data.success) {
           setStats(data.stats);
+        }
+        if (active && empData.success && empData.empresa) {
+          setEmpresaNombre(empData.empresa.nombre_comercial || 'Tienda Express');
+          setEmpresaRif(empData.empresa.rif || '');
+          setEmpresaTelefono(empData.empresa.telefono || '');
+          setEmpresaDireccion(empData.empresa.direccion || '');
         }
       } catch {
         // Ignorar error temporal
@@ -110,6 +128,38 @@ function MantenimientoModalContent({
       active = false;
     };
   }, []);
+
+  const handleSaveEmpresa = async () => {
+    if (!empresaNombre.trim()) {
+      setEmpresaMsg('El nombre comercial es obligatorio.');
+      return;
+    }
+    setSavingEmpresa(true);
+    setEmpresaMsg(null);
+    try {
+      const res = await fetch('/api/empresa', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nombre_comercial: empresaNombre.trim(),
+          rif: empresaRif.trim(),
+          telefono: empresaTelefono.trim(),
+          direccion: empresaDireccion.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEmpresaMsg('Identidad guardada.');
+        onCompleted?.();
+      } else {
+        setEmpresaMsg(data.message || 'No se pudo guardar.');
+      }
+    } catch {
+      setEmpresaMsg('Error al guardar identidad.');
+    } finally {
+      setSavingEmpresa(false);
+    }
+  };
 
   const handleExecute = async () => {
     if (confirmPhrase.trim().toUpperCase() !== 'REINICIAR') {
@@ -269,6 +319,68 @@ function MantenimientoModalContent({
               >
                 <Download className={`w-3.5 h-3.5 text-indigo-500 ${downloadingBackup ? 'animate-bounce' : ''}`} />
                 {downloadingBackup ? 'Descargando...' : 'Descargar Copia SQL'}
+              </button>
+            </div>
+          </div>
+
+          {/* Configurable Store Identity */}
+          <div className={`p-4 rounded-xl border space-y-2.5 ${
+            isDarkMode ? 'bg-slate-950/50 border-slate-800' : 'bg-slate-50 border-slate-200'
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Identidad de la Tienda (Recibos y Cabecera)
+              </span>
+              {empresaMsg && (
+                <span className="text-[11px] font-semibold text-indigo-500">{empresaMsg}</span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={empresaNombre}
+                onChange={(e) => setEmpresaNombre(e.target.value)}
+                placeholder="Nombre comercial"
+                className={`px-3 py-1.5 rounded-lg border text-xs font-semibold ${
+                  isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+                }`}
+              />
+              <input
+                type="text"
+                value={empresaRif}
+                onChange={(e) => setEmpresaRif(e.target.value)}
+                placeholder="RIF / Identificación"
+                className={`px-3 py-1.5 rounded-lg border text-xs ${
+                  isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+                }`}
+              />
+              <input
+                type="text"
+                value={empresaTelefono}
+                onChange={(e) => setEmpresaTelefono(e.target.value)}
+                placeholder="Teléfono"
+                className={`px-3 py-1.5 rounded-lg border text-xs ${
+                  isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+                }`}
+              />
+              <input
+                type="text"
+                value={empresaDireccion}
+                onChange={(e) => setEmpresaDireccion(e.target.value)}
+                placeholder="Dirección"
+                className={`px-3 py-1.5 rounded-lg border text-xs ${
+                  isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+                }`}
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleSaveEmpresa}
+                disabled={savingEmpresa}
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition disabled:opacity-50"
+              >
+                {savingEmpresa ? 'Guardando...' : 'Guardar Identidad'}
               </button>
             </div>
           </div>
