@@ -6,7 +6,7 @@ import { Usuario } from '@/types';
 
 interface LoginModalProps {
   isOpen: boolean;
-  onLoginSuccess: (user: Usuario) => void;
+  onLoginSuccess: (user: Usuario, mustChangePassword?: boolean) => void;
   isDarkMode?: boolean;
 }
 
@@ -32,13 +32,17 @@ export default function LoginModal({ isOpen, onLoginSuccess, isDarkMode = false 
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ username: username.trim(), password }),
       });
 
       const data = await res.json();
 
-      if (data.success && data.user) {
-        onLoginSuccess(data.user);
+      if (res.ok && data.success && data.user) {
+        setUsername('');
+        setPassword('');
+        setError(null);
+        onLoginSuccess(data.user, Boolean(data.mustChangePassword));
       } else {
         setError(data.message || 'Usuario o contraseña incorrectos');
       }
@@ -89,9 +93,10 @@ export default function LoginModal({ isOpen, onLoginSuccess, isDarkMode = false 
             <input
               type="text"
               autoFocus
+              autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="ej: admin o cajero"
+              placeholder="Ingresa tu nombre de usuario"
               className={`w-full px-4 py-2.5 rounded-xl border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition ${
                 isDarkMode
                   ? 'bg-slate-800/80 border-slate-700 text-white placeholder-slate-500'
@@ -106,6 +111,7 @@ export default function LoginModal({ isOpen, onLoginSuccess, isDarkMode = false 
             </label>
             <input
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
@@ -141,7 +147,7 @@ export default function LoginModal({ isOpen, onLoginSuccess, isDarkMode = false 
             }`}
           >
             <ShieldCheck className="w-3.5 h-3.5 inline mr-1 text-emerald-500" />
-            Acceso seguro multimoneda. Usuario por defecto: <strong className="text-indigo-500 font-mono">admin</strong> / clave: <strong className="text-indigo-500 font-mono">admin123</strong>
+            Acceso restringido a personal autorizado. Si olvidaste tu clave contacta al administrador.
           </div>
         </form>
       </div>
