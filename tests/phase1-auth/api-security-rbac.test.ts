@@ -815,6 +815,7 @@ describe('4. Controles críticos: mantenimiento, respaldo redactado, protección
             {
               id: 10,
               nombre: 'Harina',
+              precio_usd: 5,
               stock_actual: 50,
               impuesto_id: 1,
               unidad_base: 'Unidad',
@@ -827,7 +828,7 @@ describe('4. Controles críticos: mantenimiento, respaldo redactado, protección
         return { rows: [{ id: 501, total_usd: 11.6 }] };
       }
       if (sql.includes('FROM m_tipopago WHERE id = $1')) {
-        return { rows: [{ moneda: 'USD' }] };
+        return { rows: [{ id: 1, moneda: 'USD' }] };
       }
       if (sql.includes('INSERT INTO t_pago (')) {
         return { rows: [{ id: 601 }] };
@@ -880,7 +881,10 @@ describe('4. Controles críticos: mantenimiento, respaldo redactado, protección
         return { rows: [{ id: 701 }] };
       }
       if (sql.includes('FROM m_tipopago WHERE id = $1')) {
-        return { rows: [{ moneda: 'USD' }] };
+        return { rows: [{ id: 1, moneda: 'USD' }] };
+      }
+      if (sql.includes('INSERT INTO t_pago (')) {
+        return { rows: [{ id: 751 }] };
       }
       if (sql.includes('FROM m_producto WHERE id = $1 FOR UPDATE')) {
         return { rows: [{ id: 10, stock_actual: 10, costo_promedio_usd: 2 }] };
@@ -922,6 +926,9 @@ describe('4. Controles críticos: mantenimiento, respaldo redactado, protección
     setupLiveUserQuery(SUPERVISOR_USER);
 
     mockClientQuery.mockImplementation(async (sql) => {
+      if (sql.includes('FROM m_tipopago WHERE id = $1')) {
+        return { rows: [{ id: 1, moneda: 'USD' }] };
+      }
       if (sql.includes('INSERT INTO t_pago (')) {
         return { rows: [{ id: 801, creado_por: SUPERVISOR_USER.id }] };
       }
