@@ -24,6 +24,15 @@ interface MaintenanceStats {
   compralineas: number;
   productos: number;
   terceros: number;
+  pagos?: number;
+  cuentasConSaldo?: number;
+}
+
+interface MantenimientoModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onCompleted?: () => void;
+  isDarkMode?: boolean;
 }
 
 export default function MantenimientoModal({
@@ -31,18 +40,31 @@ export default function MantenimientoModal({
   onClose,
   onCompleted,
   isDarkMode = false,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  onCompleted?: () => void;
-  isDarkMode?: boolean;
-}) {
+}: MantenimientoModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <MantenimientoModalContent
+      onClose={onClose}
+      onCompleted={onCompleted}
+      isDarkMode={isDarkMode}
+    />
+  );
+}
+
+function MantenimientoModalContent({
+  onClose,
+  onCompleted,
+  isDarkMode,
+}: Omit<MantenimientoModalProps, 'isOpen'> & { isDarkMode: boolean }) {
   const [stats, setStats] = useState<MaintenanceStats | null>(null);
-  const [loadingStats, setLoadingStats] = useState(false);
+  const [loadingStats, setLoadingStats] = useState(true);
   const [executing, setExecuting] = useState(false);
   const [selectedAction, setSelectedAction] = useState<'reset_ventas' | 'reset_compras' | 'reset_ambos'>('reset_ambos');
   const [resetStock, setResetStock] = useState(false);
   const [newStockValue, setNewStockValue] = useState<number>(0);
+  const [resetBalances, setResetBalances] = useState(false);
+  const [newBalanceValue, setNewBalanceValue] = useState<number>(0);
   const [confirmPhrase, setConfirmPhrase] = useState('');
   const [downloadingBackup, setDownloadingBackup] = useState(false);
 
@@ -69,14 +91,25 @@ export default function MantenimientoModal({
   };
 
   useEffect(() => {
-    if (isOpen) {
-      setStatusMessage(null);
-      setConfirmPhrase('');
-      fetchStats();
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
+    let active = true;
+    const loadInitialStats = async () => {
+      try {
+        const res = await fetch('/api/mantenimiento');
+        const data = await res.json();
+        if (active && data.success) {
+          setStats(data.stats);
+        }
+      } catch {
+        // Ignorar error temporal
+      } finally {
+        if (active) setLoadingStats(false);
+      }
+    };
+    loadInitialStats();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleExecute = async () => {
     if (confirmPhrase.trim().toUpperCase() !== 'REINICIAR') {
@@ -98,6 +131,8 @@ export default function MantenimientoModal({
           action: selectedAction,
           resetStock,
           newStockValue: Number(newStockValue) || 0,
+          resetBalances,
+          newBalanceValue: Number(newBalanceValue) || 0,
           confirmPhrase: confirmPhrase.trim(),
         }),
       });
@@ -181,7 +216,7 @@ export default function MantenimientoModal({
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div className={`p-2.5 rounded-lg border text-center ${
                 isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
               }`}>
@@ -207,6 +242,15 @@ export default function MantenimientoModal({
                   {stats ? stats.productos : '...'}
                 </div>
                 <div className="text-[11px] text-slate-500">Productos en Catálogo</div>
+              </div>
+
+              <div className={`p-2.5 rounded-lg border text-center ${
+                isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+              }`}>
+                <div className="text-lg font-bold font-mono text-sky-600 dark:text-sky-400">
+                  {stats ? (stats.pagos ?? 0) : '...'}
+                </div>
+                <div className="text-[11px] text-slate-500">Pagos Registrados</div>
               </div>
             </div>
 
@@ -332,6 +376,38 @@ export default function MantenimientoModal({
                   value={newStockValue}
                   onChange={(e) => setNewStockValue(parseFloat(e.target.value) || 0)}
                   className={`w-24 px-2.5 py-1 text-xs font-mono font-bold rounded-lg border focus:ring-2 focus:ring-rose-500/50 ${
+                    isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Optional bank/cash balance adjustment */}
+          <div className={`p-3.5 rounded-xl border space-y-2.5 ${
+            isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-50 border-slate-200'
+          }`}>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={resetBalances}
+                onChange={(e) => setResetBalances(e.target.checked)}
+                className="rounded border-slate-300 text-rose-600 focus:ring-rose-500 w-4 h-4"
+              />
+              <span className="text-xs font-semibold">
+                ¿Reestablecer también los saldos de cuentas bancarias y cajas?
+              </span>
+            </label>
+
+            {resetBalances && (
+              <div className="flex items-center gap-3 pt-1">
+                <span className="text-xs text-slate-500">Fijar saldo de todas las cuentas en:</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={newBalanceValue}
+                  onChange={(e) => setNewBalanceValue(parseFloat(e.target.value) || 0)}
+                  className={`w-28 px-2.5 py-1 text-xs font-mono font-bold rounded-lg border focus:ring-2 focus:ring-rose-500/50 ${
                     isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
                   }`}
                 />
