@@ -61,10 +61,7 @@ INSERT INTO m_tipopago (id, codigo, nombre, moneda, requiere_referencia, activo)
 (5, 'TRANSFERENCIA_VES', 'Transferencia Bancaria (Bs)', 'VES', true, true),
 (6, 'ZELLE', 'Zelle ($)', 'USD', true, true),
 (7, 'CASHEA', 'Cashea (App Móvil)', 'USD', true, true)
-ON CONFLICT (id) DO UPDATE 
-SET nombre = EXCLUDED.nombre,
-    moneda = EXCLUDED.moneda,
-    requiere_referencia = EXCLUDED.requiere_referencia;
+ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('m_tipopago_id_seq', COALESCE((SELECT MAX(id) FROM m_tipopago), 7));
 
@@ -75,9 +72,7 @@ INSERT INTO m_banco (id, codigo, nombre, tipo, activo) VALUES
 (3, '0134', 'Banesco Banco Universal', 'BANCO', true),
 (4, '0108', 'Banco Provincial', 'BANCO', true),
 (5, '0105', 'Banco Mercantil', 'BANCO', true)
-ON CONFLICT (id) DO UPDATE SET
-    tipo = EXCLUDED.tipo,
-    nombre = EXCLUDED.nombre;
+ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('m_banco_id_seq', COALESCE((SELECT MAX(id) FROM m_banco), 5));
 
@@ -87,11 +82,7 @@ INSERT INTO m_cuentabancaria (id, banco_id, nombre, tipo_cuenta, numero_cuenta, 
 (2, 1, 'Caja Principal Bolívares (Bs)', 'CAJA_EFECTIVO', 'N/A', 'VES', 0, true),
 (3, 3, 'Banesco Corriente / Pago Móvil (Bs)', 'CORRIENTE', '0134-0000-00-0000000000', 'VES', 0, true),
 (4, 2, 'BDV Cuenta Corriente (Bs)', 'CORRIENTE', '0102-0000-00-0000000000', 'VES', 0, true)
-ON CONFLICT (id) DO UPDATE SET
-    banco_id = EXCLUDED.banco_id,
-    nombre = EXCLUDED.nombre,
-    tipo_cuenta = EXCLUDED.tipo_cuenta,
-    moneda = EXCLUDED.moneda;
+ON CONFLICT (id) DO NOTHING;
 
 SELECT setval('m_cuentabancaria_id_seq', COALESCE((SELECT MAX(id) FROM m_cuentabancaria), 4));
 
@@ -100,17 +91,20 @@ INSERT INTO m_tasa (fecha, tasa)
 VALUES (CURRENT_DATE, 36.5000)
 ON CONFLICT (fecha) DO NOTHING;
 
--- 6. Productos Demo Iniciales
-INSERT INTO m_producto (nombre, precio_usd, stock_actual, costo_promedio_usd, impuesto_id, activo) VALUES
-('Café Molido Gourmet 500g', 5.50, 25.00, 3.80, 1, true),
-('Harina de Maíz Precocida 1kg', 1.20, 50.00, 0.85, 2, true),
-('Arroz Blanco Premium 1kg', 1.40, 40.00, 0.95, 2, true),
-('Aceite Vegetal 1L', 3.20, 30.00, 2.20, 1, true),
-('Azúcar Refinada 1kg', 1.50, 45.00, 1.05, 2, true),
-('Pasta Spaghetti 500g', 1.10, 60.00, 0.75, 2, true),
-('Leche Completa Polvo 900g', 8.50, 20.00, 6.00, 2, true),
-('Refresco Cola 2L', 2.00, 35.00, 1.30, 1, true)
-ON CONFLICT DO NOTHING;
+-- 6. Productos Demo Iniciales (solo si el catálogo está vacío)
+INSERT INTO m_producto (nombre, precio_usd, stock_actual, costo_promedio_usd, impuesto_id, activo)
+SELECT v.nombre, v.precio_usd, v.stock_actual, v.costo_promedio_usd, v.impuesto_id, v.activo
+FROM (VALUES
+  ('Café Molido Gourmet 500g', 5.50, 25.00, 3.80, 1, true),
+  ('Harina de Maíz Precocida 1kg', 1.20, 50.00, 0.85, 2, true),
+  ('Arroz Blanco Premium 1kg', 1.40, 40.00, 0.95, 2, true),
+  ('Aceite Vegetal 1L', 3.20, 30.00, 2.20, 1, true),
+  ('Azúcar Refinada 1kg', 1.50, 45.00, 1.05, 2, true),
+  ('Pasta Spaghetti 500g', 1.10, 60.00, 0.75, 2, true),
+  ('Leche Completa Polvo 900g', 8.50, 20.00, 6.00, 2, true),
+  ('Refresco Cola 2L', 2.00, 35.00, 1.30, 1, true)
+) AS v(nombre, precio_usd, stock_actual, costo_promedio_usd, impuesto_id, activo)
+WHERE NOT EXISTS (SELECT 1 FROM m_producto LIMIT 1);
 
 COMMIT;
 

@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
 import { getStoredDbConfig, getPool } from '@/lib/db';
 import { requireAuth } from '@/lib/api-auth';
+import { BACKUP_TABLE_PRIORITY } from '@/lib/schema';
+
+const ALLOWED_BACKUP_TABLES = new Set<string>(BACKUP_TABLE_PRIORITY);
+
+function quoteIdent(name: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
+    throw new Error(`Identificador SQL inválido: ${name}`);
+  }
+  return `"${name.replace(/"/g, '""')}"`;
+}
 
 export async function GET(req: Request) {
   const auth = await requireAuth(req, { adminOnly: true, permissions: ['maintenance'] });
@@ -10,7 +20,6 @@ export async function GET(req: Request) {
   try {
     const config = getStoredDbConfig();
 
-    // Obtener todas las tablas del esquema public
     const tablesRes = await pool.query(`
       SELECT table_name 
       FROM information_schema.tables 
@@ -19,7 +28,13 @@ export async function GET(req: Request) {
       ORDER BY table_name;
     `);
 
-    const tables = tablesRes.rows.map(r => r.table_name);
+    const discoveredSet = new Set<string>(
+      tablesRes.rows
+        .map((r) => String(r.table_name))
+        .filter((name) => ALLOWED_BACKUP_TABLES.has(name))
+    );
+
+    const sortedTables = BACKUP_TABLE_PRIORITY.filter((table) => discoveredSet.has(table));
 
     let sqlDump = `-- =============================================================================\n`;
     sqlDump += `-- RESPALDO DE BASE DE DATOS TIENDA EXPRESS POS (ERP EXPRESS)\n`;
@@ -30,29 +45,8 @@ export async function GET(req: Request) {
     sqlDump += `SET client_encoding = 'UTF8';\n`;
     sqlDump += `SET standard_conforming_strings = on;\n\n`;
 
-    // Orden de inserción recomendado para evitar conflictos de Foreign Keys
-    const priorityOrder = [
-      'm_rol',
-      'm_usuario',
-      'm_impuesto',
-      'm_tercero',
-      'm_producto',
-      'm_producto_presentacion',
-      'm_tasa',
-      't_pedido',
-      't_pedidolinea',
-      't_compra',
-      't_compralinea',
-    ];
-
-    const sortedTables = [
-      ...priorityOrder.filter(t => tables.includes(t)),
-      ...tables.filter(t => !priorityOrder.includes(t))
-    ];
-
     for (const table of sortedTables) {
-      if (!/^[a-z_][a-z0-9_]*$/i.test(table)) continue;
-      const safeTable = `"${table}"`;
+      const safeTable = quoteIdent(table);
       const dataRes = await pool.query(`SELECT * FROM ${safeTable} ORDER BY id ASC`);
       if (dataRes.rows.length === 0) continue;
 
@@ -64,25 +58,27 @@ export async function GET(req: Request) {
       sqlDump += `-- -------------------------------------------------------------\n`;
 
       const columns = Object.keys(dataRes.rows[0]);
-      const colList = columns.map(c => `"${c}"`).join(', ');
+      const colList = columns.map((c) => quoteIdent(c)).join(', ');
 
       for (const row of dataRes.rows) {
-        const values = columns.map(col => {
-          const val = table === 'm_usuario' && col === 'password_hash'
-            ? '__REDACTED_RESET_REQUIRED__'
-            : row[col];
-          if (val === null || val === undefined) return 'NULL';
-          if (typeof val === 'number') return val;
-          if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
-          if (val instanceof Date) return `'${val.toISOString()}'`;
-          if (typeof val === 'object') return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
-          return `'${String(val).replace(/'/g, "''")}'`;
-        }).join(', ');
+        const values = columns
+          .map((col) => {
+            const val =
+              table === 'm_usuario' && col === 'password_hash'
+                ? '__REDACTED_RESET_REQUIRED__'
+                : row[col];
+            if (val === null || val === undefined) return 'NULL';
+            if (typeof val === 'number') return val;
+            if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+            if (val instanceof Date) return `'${val.toISOString()}'`;
+            if (typeof val === 'object') return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+            return `'${String(val).replace(/'/g, "''")}'`;
+          })
+          .join(', ');
 
         sqlDump += `INSERT INTO ${safeTable} (${colList}) VALUES (${values}) ON CONFLICT DO NOTHING;\n`;
       }
 
-      // Reiniciar la secuencia de la tabla si existe
       sqlDump += `SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${safeTable}), 1), true);\n\n`;
     }
 
@@ -95,12 +91,14 @@ export async function GET(req: Request) {
         'Content-Disposition': `attachment; filename="${filename}"`,
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error generando respaldo SQL:', error);
     return NextResponse.json(
-      { success: false, message: error?.message || 'Error al generar respaldo de la base de datos' },
+      {
+        success: false,
+        message: error instanceof Error ? error.message : 'Error al generar respaldo de la base de datos',
+      },
       { status: 500 }
     );
   }
 }
-
