@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ShieldAlert, KeyRound, Lock, LogOut, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface ChangePasswordModalProps {
@@ -16,23 +16,27 @@ export default function ChangePasswordModal({
   onLogout,
   isDarkMode = false,
 }: ChangePasswordModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <ChangePasswordModalContent
+      onPasswordChanged={onPasswordChanged}
+      onLogout={onLogout}
+      isDarkMode={isDarkMode}
+    />
+  );
+}
+
+function ChangePasswordModalContent({
+  onPasswordChanged,
+  onLogout,
+  isDarkMode,
+}: Omit<ChangePasswordModalProps, 'isOpen'>) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) {
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setError(null);
-      setLoading(false);
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
