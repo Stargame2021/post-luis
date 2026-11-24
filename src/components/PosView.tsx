@@ -41,6 +41,7 @@ interface PosViewProps {
   onOpenRates: () => void;
   onNavigatePagos?: (actionData: any) => void;
   isDarkMode?: boolean;
+  storeName?: string;
 }
 
 export default function PosView({
@@ -50,6 +51,7 @@ export default function PosView({
   onOpenRates,
   onNavigatePagos,
   isDarkMode = false,
+  storeName = 'Tienda Express',
 }: PosViewProps) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [clients, setClients] = useState<Tercero[]>([]);
@@ -85,6 +87,7 @@ export default function PosView({
   const [selectedTipoPagoId, setSelectedTipoPagoId] = useState<number | null>(null);
   const [referenciaPago, setReferenciaPago] = useState('');
   const [montoAbono, setMontoAbono] = useState<string>('');
+  const [montoRecibido, setMontoRecibido] = useState<string>('');
   const [fechaVencimiento, setFechaVencimiento] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 15);
@@ -288,6 +291,48 @@ export default function PosView({
     });
   };
 
+  // Establecer cantidad directa de forma atómica (evita setTimeout en tarjetas)
+  const setProductLineQuantity = (product: Producto, presId: number | null, rawQty: number) => {
+    const opcion = getOpcionUnidad(product, presId);
+    const lineId = makeLineId(product.id, opcion.id);
+    let targetQty = Math.max(0, Math.floor(rawQty));
+
+    if (!permitirStockNegativo && targetQty > 0) {
+      const stockTotal = Number(product.stock_actual) || 0;
+      const otherBase = getCartBaseUnits(product.id, lineId);
+      const maxQty = Math.floor(Math.max(0, stockTotal - otherBase) / opcion.factor);
+      if (targetQty > maxQty) {
+        targetQty = maxQty;
+        setNotification({
+          type: 'error',
+          text: `Máximo disponible para "${product.nombre}" (${opcion.nombre}): ${maxQty}.`,
+        });
+      }
+    }
+
+    setCart((prev) => {
+      if (targetQty <= 0) {
+        return prev.filter((c) => c.id !== lineId);
+      }
+      const exists = prev.some((c) => c.id === lineId);
+      if (exists) {
+        return prev.map((c) => (c.id === lineId ? { ...c, cantidad: targetQty } : c));
+      }
+      return [
+        ...prev,
+        {
+          id: lineId,
+          producto: product,
+          presentacion_id: opcion.id,
+          presentacion_nombre: opcion.nombre,
+          factor: opcion.factor,
+          precio_unitario_usd: opcion.precio_usd,
+          cantidad: targetQty,
+        },
+      ];
+    });
+  };
+
   // Cambiar presentación de una línea en el carrito
   const changeItemPresentation = (lineId: string, newPresId: number | null) => {
     const item = cart.find((c) => c.id === lineId);
@@ -380,6 +425,7 @@ export default function PosView({
 
     setCheckoutError(null);
     setMontoAbono('');
+    setMontoRecibido('');
     setShowCheckoutModal(true);
   };
 
@@ -392,6 +438,25 @@ export default function PosView({
     if (!currentRate || rateValue <= 0) {
       setCheckoutError('Debes registrar la tasa de cambio del día antes de procesar ventas.');
       return;
+    }
+
+    if (registrarPago) {
+      const currentTp = tiposPago.find((t) => t.id === selectedTipoPagoId);
+      if (currentTp?.requiere_referencia && !referenciaPago.trim()) {
+        setCheckoutError(`El método "${currentTp.nombre}" requiere indicar número de referencia.`);
+        return;
+      }
+
+      const abonoNum = parseFloat(montoAbono);
+      if (montoAbono && Number.isFinite(abonoNum) && abonoNum > 0) {
+        const maxAllowed = currentTp?.moneda === 'VES' ? totalLocal : totalUsd;
+        if (abonoNum > maxAllowed + 0.01) {
+          setCheckoutError(
+            `El monto del abono (${abonoNum.toFixed(2)}) no puede superar el total del pedido (${maxAllowed.toFixed(2)} ${currentTp?.moneda || 'USD'}).`
+          );
+          return;
+        }
+      }
     }
 
     setLoading(true);
@@ -535,14 +600,28 @@ export default function PosView({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* Products Catalog (7 cols) */}
         <div className="lg:col-span-7 space-y-3">
-          {/* Search bar */}
+          {/* Search bar (soporte Enter / lector código de barras o SKU exacto) */}
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar producto por nombre..."
+              placeholder="Buscar producto por nombre o presiona Enter para agregar..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && searchTerm.trim()) {
+                  e.preventDefault();
+                  const term = searchTerm.trim().toLowerCase();
+                  const exactMatch = filteredProducts.find(
+                    (item) => item.nombre.trim().toLowerCase() === term || String(item.id) === term
+                  );
+                  const target = exactMatch || (filteredProducts.length === 1 ? filteredProducts[0] : null);
+                  if (target) {
+                    addToCart(target);
+                    setSearchTerm('');
+                  }
+                }
+              }}
               className={`w-full rounded-2xl pl-10 pr-24 py-2.5 text-xs border focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-sm transition-colors ${isDarkMode
                   ? 'bg-slate-900 border-slate-800 text-white placeholder-slate-500'
                   : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400'
@@ -565,7 +644,10 @@ export default function PosView({
               const activeOpcion = getOpcionUnidad(p, activePresId);
 
               const activePriceUsd = activeOpcion.precio_usd;
-              const activePriceLocal = rateValue > 0 ? activePriceUsd * rateValue : 0;
+              const rawTaxPct = p.impuesto_porcentaje;
+              const taxPct = rawTaxPct !== undefined && rawTaxPct !== null ? Number(rawTaxPct) : 16.0;
+              const activeFinalUsd = Number((activePriceUsd * (1 + taxPct / 100)).toFixed(2));
+              const activePriceLocal = rateValue > 0 ? activeFinalUsd * rateValue : 0;
 
               // Línea en carrito correspondiente a esta presentación activa
               const activeLineId = makeLineId(p.id, activeOpcion.id);
@@ -590,8 +672,11 @@ export default function PosView({
                   {/* Badge de cantidad en carrito */}
                   {totalBaseInCart > 0 && (
                     <div className="absolute top-2 right-2 z-20">
-                      <span className="w-6 h-6 rounded-full bg-indigo-600 text-white font-mono text-xs font-bold flex items-center justify-center shadow-md shadow-indigo-600/30">
-                        {currentQty}
+                      <span
+                        title={`${totalBaseInCart} ${p.unidad_base || 'unidades'} en carrito`}
+                        className="min-w-6 h-6 px-1.5 rounded-full bg-indigo-600 text-white font-mono text-[11px] font-bold flex items-center justify-center shadow-md shadow-indigo-600/30"
+                      >
+                        {currentQty > 0 ? currentQty : `${totalBaseInCart}u`}
                       </span>
                     </div>
                   )}
@@ -663,14 +748,19 @@ export default function PosView({
                       </div>
                     )}
 
-                    {/* Precio Activo de la Presentación */}
+                    {/* Precio Activo de la Presentación (PVP Final con IVA incluido) */}
                     <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800/60">
                       <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono">
-                        ${activePriceUsd.toFixed(2)}{' '}
+                        ${activeFinalUsd.toFixed(2)}{' '}
                         <span className="text-[10px] font-normal text-slate-400">
                           / {activeOpcion.nombre}
                         </span>
                       </div>
+                      {taxPct > 0 && (
+                        <div className="text-[10px] font-mono text-slate-400">
+                          Base ${activePriceUsd.toFixed(2)} + {taxPct}% IVA
+                        </div>
+                      )}
                       {rateValue > 0 && (
                         <div className={`text-[10px] font-mono ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                           ≈ {activePriceLocal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
@@ -713,14 +803,7 @@ export default function PosView({
                         onChange={(e) => {
                           const val = e.target.value === '' ? 0 : parseInt(e.target.value, 10);
                           if (!isNaN(val)) {
-                            if (currentLineItem) {
-                              setDirectQuantity(activeLineId, val);
-                            } else if (val > 0) {
-                              addToCart(p, activePresId);
-                              if (val > 1) {
-                                setTimeout(() => setDirectQuantity(activeLineId, val), 50);
-                              }
-                            }
+                            setProductLineQuantity(p, activePresId, val);
                           }
                         }}
                         className={`w-full text-center text-xs font-bold font-mono py-1 rounded-xl border focus:ring-2 focus:ring-indigo-500/50 outline-none transition ${currentQty > 0
@@ -1137,7 +1220,7 @@ export default function PosView({
                     ¡Venta Exitosa!
                   </h3>
                   <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                    Comprobante de Pedido #{lastCompletedOrder.id}
+                    {storeName} · Comprobante de Pedido #{lastCompletedOrder.id}
                   </p>
                   <div className="mt-2 flex justify-center">
                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
@@ -1243,7 +1326,15 @@ export default function PosView({
                   </div>
                 </div>
 
-                <div className="flex justify-center pt-1">
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Receipt className="w-4 h-4" />
+                    Imprimir Ticket
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -1251,7 +1342,7 @@ export default function PosView({
                       setShowCheckoutModal(false);
                       setCheckoutError(null);
                     }}
-                    className="w-full py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+                    className="flex-1 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
                   >
                     Cerrar Comprobante
                   </button>
@@ -1520,25 +1611,71 @@ export default function PosView({
 
                       {(() => {
                         const currentTp = tiposPago.find((t) => t.id === selectedTipoPagoId);
-                        if (currentTp?.requiere_referencia || referenciaPago) {
-                          return (
-                            <div className="space-y-1">
-                              <label className="block text-[11px] font-semibold text-slate-500">
-                                Número / Referencia de Pago {currentTp?.requiere_referencia && <span className="text-rose-500">*</span>}
-                              </label>
-                              <input
-                                type="text"
-                                placeholder="Ej: Últimos 4 dígitos o ref bancaria / ID Cashea"
-                                value={referenciaPago}
-                                onChange={(e) => setReferenciaPago(e.target.value)}
-                                className={`w-full px-3 py-1.5 rounded-xl border text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
-                                  isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
-                                }`}
-                              />
-                            </div>
-                          );
-                        }
-                        return null;
+                        const payMoneda = currentTp?.moneda || 'USD';
+                        const abonoNum = parseFloat(montoAbono);
+                        const expectedToPay =
+                          condicionPago !== 'CONTADO' && Number.isFinite(abonoNum) && abonoNum > 0
+                            ? abonoNum
+                            : payMoneda === 'VES'
+                            ? totalLocal
+                            : totalUsd;
+                        const receivedNum = parseFloat(montoRecibido);
+                        const vuelto =
+                          Number.isFinite(receivedNum) && receivedNum >= expectedToPay
+                            ? receivedNum - expectedToPay
+                            : null;
+
+                        return (
+                          <>
+                            {!currentTp?.requiere_referencia && (
+                              <div className="p-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 space-y-1.5">
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                    Efectivo Recibido / Vuelto ({payMoneda})
+                                  </span>
+                                  <span className="font-mono text-slate-400">
+                                    Por cobrar: {payMoneda === 'VES' ? `${expectedToPay.toFixed(2)} Bs.` : `$${expectedToPay.toFixed(2)}`}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder={`Monto recibido (${payMoneda})`}
+                                    value={montoRecibido}
+                                    onChange={(e) => setMontoRecibido(e.target.value)}
+                                    className={`flex-1 px-3 py-1.5 rounded-xl border text-xs font-mono font-bold ${
+                                      isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+                                    }`}
+                                  />
+                                  {vuelto !== null && (
+                                    <div className="px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-xs font-mono font-black text-emerald-600 dark:text-emerald-400">
+                                      Vuelto: {payMoneda === 'VES' ? `${vuelto.toFixed(2)} Bs.` : `$${vuelto.toFixed(2)}`}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {(currentTp?.requiere_referencia || referenciaPago) && (
+                              <div className="space-y-1">
+                                <label className="block text-[11px] font-semibold text-slate-500">
+                                  Número / Referencia de Pago {currentTp?.requiere_referencia && <span className="text-rose-500">*</span>}
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Ej: Últimos 4 dígitos o ref bancaria / ID Cashea"
+                                  value={referenciaPago}
+                                  onChange={(e) => setReferenciaPago(e.target.value)}
+                                  className={`w-full px-3 py-1.5 rounded-xl border text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                                    isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+                                  }`}
+                                />
+                              </div>
+                            )}
+                          </>
+                        );
                       })()}
                     </div>
                   )}

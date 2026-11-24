@@ -43,6 +43,7 @@ interface MainMenuViewProps {
   productsCount: number;
   isDarkMode?: boolean;
   currentUser?: Usuario | null;
+  storeName?: string;
 }
 
 export default function MainMenuView({
@@ -54,6 +55,7 @@ export default function MainMenuView({
   productsCount,
   isDarkMode = false,
   currentUser,
+  storeName = 'Tienda Express',
 }: MainMenuViewProps) {
   const [currentPage, setCurrentPage] = useState<0 | 1 | 2 | 3>(0);
   const [viewMode, setViewMode] = useState<'slider' | 'grid'>('slider');
@@ -474,7 +476,7 @@ export default function MainMenuView({
             <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${
               isDarkMode ? 'text-white' : 'text-slate-900'
             }`}>
-              Tienda Express <span className="text-indigo-600 dark:text-indigo-400">POS</span>
+              {storeName} <span className="text-indigo-600 dark:text-indigo-400">POS</span>
             </h2>
             <p className={`text-sm max-w-xl ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
               Selecciona el módulo con el que deseas trabajar. Desliza a la izquierda o usa los controles para navegar entre opciones.

@@ -1198,11 +1198,14 @@ export default function ComprasView({
                                     >
                                       {unitOptions.map((opt) => (
                                         <option key={opt.id ?? 'base'} value={opt.id ?? ''}>
-                                          {opt.nombre} {opt.factor > 1 ? `(x${opt.factor} ${selectedProd.unidad_base || 'unid'})` : `(Base: ${selectedProd.unidad_base || 'Unid'})`}
+                                          {opt.nombre}{' '}
+                                          {opt.id !== null
+                                            ? `(x${opt.factor} ${selectedProd.unidad_base || 'unid'})`
+                                            : `(Base: ${selectedProd.unidad_base || 'Unid'})`}
                                         </option>
                                       ))}
                                     </select>
-                                    {factor > 1 && (
+                                    {(line.presentacion_id !== null || factor > 1) && (
                                       <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">
                                         = {totalBaseUnits} {selectedProd.unidad_base || 'unid'} (${costPerBaseUnit.toFixed(4)} c/u)
                                       </div>
@@ -1554,8 +1557,9 @@ export default function ComprasView({
                   <div className="mt-0.5">
                     <select
                       value={selectedCompra.estado || 'COMPLETADO'}
+                      disabled={selectedCompra.estado === 'ANULADO'}
                       onChange={(e) => handleUpdateStatus(selectedCompra, e.target.value as EstadoCompra)}
-                      className={`text-xs font-semibold py-1 px-2 rounded-lg border ${
+                      className={`text-xs font-semibold py-1 px-2 rounded-lg border disabled:opacity-60 ${
                         isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'
                       }`}
                     >
@@ -1584,9 +1588,9 @@ export default function ComprasView({
                       <tr key={idx}>
                         <td className="py-2 px-3 font-medium">
                           <div className="font-semibold">{line.producto_nombre}</div>
-                          {line.presentacion_nombre && line.factor_conversion && Number(line.factor_conversion) > 1 && (
+                          {line.presentacion_id !== null && line.presentacion_nombre && (
                             <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">
-                              Presentación: {line.presentacion_nombre} (x{line.factor_conversion}) • Ingreso real: {line.cantidad_base} unidades
+                              Presentación: {line.presentacion_nombre} (x{line.factor_conversion || 1}) • Ingreso real: {line.cantidad_base} unidades
                             </div>
                           )}
                         </td>
@@ -1598,9 +1602,9 @@ export default function ComprasView({
                         </td>
                         <td className="py-2 px-3 text-right font-mono">
                           <div>${Number(line.costo_unitario_usd).toFixed(2)}</div>
-                          {line.factor_conversion && Number(line.factor_conversion) > 1 && (
+                          {line.presentacion_id !== null && Number(line.factor_conversion || 1) > 0 && (
                             <div className="text-[9px] text-slate-400 font-mono">
-                              (${(Number(line.costo_unitario_usd) / Number(line.factor_conversion)).toFixed(4)} c/u base)
+                              (${(Number(line.costo_unitario_usd) / Number(line.factor_conversion || 1)).toFixed(4)} c/u base)
                             </div>
                           )}
                         </td>

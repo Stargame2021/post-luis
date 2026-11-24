@@ -76,11 +76,19 @@ export default function Home() {
   const [isDarkMode, setIsDarkMode] = useState(false);
 
   // App data state
+  const [storeName, setStoreName] = useState('Tienda Express');
   const [products, setProducts] = useState<Producto[]>([]);
   const [currentRate, setCurrentRate] = useState<Tasa | null>(null);
   const [historyRates, setHistoryRates] = useState<Tasa[]>([]);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const navigateToTab = useCallback((nextTab: ActiveTab) => {
+    if (nextTab !== 'pagos') {
+      setPagosInitialAction(null);
+    }
+    setActiveTab(nextTab);
+  }, []);
 
   const resetClientSession = useCallback(() => {
     setCurrentUser(null);
@@ -147,6 +155,15 @@ export default function Home() {
     };
 
     verifySession();
+
+    fetch('/api/empresa', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (active && d?.success && d.empresa?.nombre_comercial) {
+          setStoreName(String(d.empresa.nombre_comercial));
+        }
+      })
+      .catch(() => {});
 
     return () => {
       active = false;
@@ -286,6 +303,11 @@ export default function Home() {
         }
       }
 
+      const empresaOutcome = await requestJson('/api/empresa');
+      if (empresaOutcome.status === 'ok' && empresaOutcome.data?.success && empresaOutcome.data.empresa?.nombre_comercial) {
+        setStoreName(String(empresaOutcome.data.empresa.nombre_comercial));
+      }
+
       if (hasDbFailure) {
         setDbConnected(false);
       } else if (hasDbSuccess) {
@@ -320,7 +342,7 @@ export default function Home() {
     if (tabId === 'reports') {
       setReportSubTab(hasTabPermission(currentUser, 'reports', 'ventas') ? 'ventas' : 'rentabilidad');
     }
-    setActiveTab(tabId);
+    navigateToTab(tabId);
   };
 
   const canViewCurrentTab =
@@ -391,12 +413,12 @@ export default function Home() {
                 if (activeTab === 'menu') {
                   setShowQrModal(true);
                 } else {
-                  setActiveTab('menu');
+                  navigateToTab('menu');
                 }
               }}
               title={
                 !currentUser
-                  ? 'Tienda Express POS'
+                  ? `${storeName} POS`
                   : activeTab === 'menu'
                     ? 'Ver Código QR para Móvil'
                     : 'Ir al Menú Principal'
@@ -412,7 +434,7 @@ export default function Home() {
                     isDarkMode ? 'text-white' : 'text-slate-900'
                   }`}
                 >
-                  Tienda Express{' '}
+                  {storeName}{' '}
                   <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 dark:bg-indigo-500/20 border border-indigo-500/20">
                     POS
                   </span>
@@ -696,7 +718,7 @@ export default function Home() {
           <MainMenuView
             onNavigate={(tab: ActiveTab, subTab?: 'ventas' | 'rentabilidad' | 'inventario') => {
               if (!hasTabPermission(currentUser, tab, subTab)) return;
-              setActiveTab(tab);
+              navigateToTab(tab);
               if (subTab) setReportSubTab(subTab);
             }}
             onOpenDbModal={() => {
@@ -714,6 +736,7 @@ export default function Home() {
             productsCount={products.length}
             isDarkMode={isDarkMode}
             currentUser={currentUser}
+            storeName={storeName}
           />
         )}
 
@@ -724,18 +747,19 @@ export default function Home() {
             onOrderCompleted={fetchData}
             onOpenRates={() => {
               if (canOpenRates) {
-                setActiveTab('rates');
+                navigateToTab('rates');
               }
             }}
             onNavigatePagos={
               hasTabPermission(currentUser, 'pagos')
                 ? (actionData) => {
                     setPagosInitialAction(actionData);
-                    setActiveTab('pagos');
+                    navigateToTab('pagos');
                   }
                 : undefined
             }
             isDarkMode={isDarkMode}
+            storeName={storeName}
           />
         )}
 
@@ -750,7 +774,7 @@ export default function Home() {
           )}
 
         {currentUser && activeTab === 'orders' && hasTabPermission(currentUser, 'orders') && (
-          <OrdersView isDarkMode={isDarkMode} onRefreshProducts={fetchData} />
+          <OrdersView isDarkMode={isDarkMode} onRefreshProducts={fetchData} storeName={storeName} />
         )}
 
         {currentUser && activeTab === 'compras' && hasTabPermission(currentUser, 'compras') && (
@@ -856,7 +880,7 @@ export default function Home() {
             : 'border-slate-200 bg-white text-slate-400 shadow-inner'
         }`}
       >
-        Tienda Express &bull; POS, Compras, Inventario, Terceros e Impuestos &bull; PostgreSQL
+        {storeName} &bull; POS, Compras, Inventario, Terceros e Impuestos &bull; PostgreSQL
       </footer>
 
       {/* Database Modal */}
@@ -887,6 +911,7 @@ export default function Home() {
         isOpen={showLoginModal}
         onLoginSuccess={handleLoginSuccess}
         isDarkMode={isDarkMode}
+        storeName={storeName}
       />
 
       {/* Modal Obligatorio de Cambio de Contraseña */}

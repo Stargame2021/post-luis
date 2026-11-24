@@ -370,7 +370,7 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
           ['Base Imponible Bs.', res.totalBaseLocal || Number((res.totalBaseUsd * appliedRate).toFixed(2))],
           ['IVA Total USD', res.totalIvaUsd],
           ['IVA Total Bs.', res.totalIvaLocal || Number((res.totalIvaUsd * appliedRate).toFixed(2))],
-          ['Cantidad de Pedidos', res.totalPedidos],
+          ['Cantidad de Pedidos', res.cantidadPedidos],
           ['Ticket Promedio USD', res.ticketPromedioUsd],
           ['Tasa BCV Promedio', res.tasaPromedio || appliedRate],
           ['Período Desde', fechaDesde],
@@ -399,20 +399,23 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
       const wsProd = XLSX.utils.aoa_to_sheet([prodHeaders, ...prodRows]);
       XLSX.utils.book_append_sheet(wb, wsProd, 'Rentabilidad Productos');
 
-      // Sheet 2: Rentabilidad por Ticket
-      if (reportData.rentabilidadFifo.porPedido) {
-        const pedHeaders = ['ID Pedido', 'Fecha', 'Cliente', 'Venta Total USD', 'Costo FIFO USD', 'Utilidad USD', 'Margen %'];
-        const pedRows = reportData.rentabilidadFifo.porPedido.map((p: any) => [
+      // Sheet 2: Detalle de Ventas FIFO (por línea / lote consumido)
+      if (reportData.rentabilidadFifo.ventasDetalle) {
+        const pedHeaders = ['ID Pedido', 'Fecha', 'Cliente', 'Producto', 'Presentación', 'Cant. Base', 'Ingreso USD', 'Costo FIFO USD', 'Utilidad USD', 'Margen %'];
+        const pedRows = reportData.rentabilidadFifo.ventasDetalle.map((p: any) => [
           p.pedido_id,
-          new Date(p.fecha).toLocaleString('es-VE'),
+          new Date(p.fecha_hora).toLocaleString('es-VE'),
           p.cliente_nombre || 'Consumidor Final',
-          Number(p.venta_total_usd),
-          Number(p.costo_fifo_usd),
-          Number(p.utilidad_usd),
+          p.producto_nombre,
+          p.presentacion_nombre || p.unidad_base || 'Unidad',
+          Number(p.cantidad_base),
+          Number(p.ingreso_usd),
+          Number(p.costo_fifo_total_usd),
+          Number(p.utilidad_bruta_usd),
           Number(p.margen_porcentaje),
         ]);
         const wsPed = XLSX.utils.aoa_to_sheet([pedHeaders, ...pedRows]);
-        XLSX.utils.book_append_sheet(wb, wsPed, 'Rentabilidad Ventas');
+        XLSX.utils.book_append_sheet(wb, wsPed, 'Detalle Ventas FIFO');
       }
 
       // Sheet 3: Resumen FIFO
@@ -420,10 +423,10 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
       if (rFifo) {
         const resHeaders = ['Métrica FIFO', 'Valor USD', 'Valor Bs.'];
         const resRows = [
-          ['Ingresos Totales por Ventas', rFifo.totalVentasUsd, (rFifo.totalVentasUsd * appliedRate).toFixed(2)],
-          ['Costo Total de Ventas (FIFO)', rFifo.totalCostoFifoUsd, (rFifo.totalCostoFifoUsd * appliedRate).toFixed(2)],
-          ['Utilidad Bruta Global', rFifo.utilidadBrutaGlobalUsd, (rFifo.utilidadBrutaGlobalUsd * appliedRate).toFixed(2)],
-          ['Margen Bruto Global %', `${rFifo.margenBrutoGlobalPorcentaje}%`, ''],
+          ['Ingresos Totales por Ventas', rFifo.totalIngresosUsd, (rFifo.totalIngresosUsd * appliedRate).toFixed(2)],
+          ['Costo Total de Ventas (FIFO)', rFifo.totalCostosFifoUsd, (rFifo.totalCostosFifoUsd * appliedRate).toFixed(2)],
+          ['Utilidad Bruta Global', rFifo.totalUtilidadBrutaUsd, (rFifo.totalUtilidadBrutaUsd * appliedRate).toFixed(2)],
+          ['Margen Bruto Global %', `${rFifo.margenGlobalPorcentaje}%`, ''],
           ['Tasa BCV Aplicada', appliedRate, ''],
           ['Período Desde', fechaDesde, ''],
           ['Período Hasta', fechaHasta, ''],
@@ -533,8 +536,8 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
           ['Total Productos en Catálogo', invSum.totalProductos, ''],
           ['Productos Activos', invSum.productosActivos, ''],
           ['Total Unidades Físicas en Stock', invSum.totalUnidadesEnStock, ''],
-          ['Valor Total al Costo', invSum.valorCostoTotalGlobalUsd, (invSum.valorCostoTotalGlobalUsd * appliedRate).toFixed(2)],
-          ['Valor Total a Venta Proyectado', invSum.valorVentaTotalGlobalUsd, (invSum.valorVentaTotalGlobalUsd * appliedRate).toFixed(2)],
+          ['Valor Total al Costo', invSum.valorTotalCostoUsd, (invSum.valorTotalCostoUsd * appliedRate).toFixed(2)],
+          ['Valor Total a Venta Proyectado', invSum.valorTotalVentaUsd, (invSum.valorTotalVentaUsd * appliedRate).toFixed(2)],
           ['Ganancia Potencial Global', invSum.utilidadPotencialGlobalUsd, (invSum.utilidadPotencialGlobalUsd * appliedRate).toFixed(2)],
           ['Margen Potencial Global %', `${invSum.margenPotencialGlobalPct}%`, ''],
           ['Productos Agotados (Stock 0)', invSum.productosAgotados, ''],
@@ -548,6 +551,18 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
 
       XLSX.writeFile(wb, `reporte_inventario_${new Date().toISOString().split('T')[0]}.xlsx`);
     }
+  };
+
+  const downloadCsvBlob = (filename: string, csvText: string) => {
+    const blob = new Blob(['\uFEFF' + csvText], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // CSV Export Handler
@@ -606,14 +621,8 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
           ];
         }
       });
-      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e: any[]) => e.join(','))].join('\n');
-      const encodedUri = encodeURI(csvContent);
-      const link = document.createElement('a');
-      link.setAttribute('href', encodedUri);
-      link.setAttribute('download', `reporte_ventas_${salesCurrencyMode}_${fechaDesde}_al_${fechaHasta}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const csvText = [headers.join(','), ...rows.map((e: any[]) => e.join(','))].join('\n');
+      downloadCsvBlob(`reporte_ventas_${salesCurrencyMode}_${fechaDesde}_al_${fechaHasta}.csv`, csvText);
     } else if (activeTab === 'rentabilidad') {
       if (!reportData?.rentabilidadFifo?.porProducto) return;
       const headers = ['ID Producto', 'Producto', 'Unidades Vendidas', 'Ingreso Total USD', 'Costo FIFO Total USD', 'Utilidad Bruta USD', 'Margen %'];
@@ -626,14 +635,8 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
         p.utilidad_bruta_usd,
         `${p.margen_porcentaje}%`,
       ]);
-      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e: any[]) => e.join(','))].join('\n');
-      const encodedUri = encodeURI(csvContent);
-      const link = document.createElement('a');
-      link.setAttribute('href', encodedUri);
-      link.setAttribute('download', `reporte_rentabilidad_fifo_${fechaDesde}_al_${fechaHasta}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const csvText = [headers.join(','), ...rows.map((e: any[]) => e.join(','))].join('\n');
+      downloadCsvBlob(`reporte_rentabilidad_fifo_${fechaDesde}_al_${fechaHasta}.csv`, csvText);
     } else {
       if (!reportData?.inventario?.productos) return;
       const headers = [
@@ -682,14 +685,8 @@ export default function ReportesView({ currentRate, initialTab = 'ventas', isDar
           st,
         ];
       });
-      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e: any[]) => e.join(','))].join('\n');
-      const encodedUri = encodeURI(csvContent);
-      const link = document.createElement('a');
-      link.setAttribute('href', encodedUri);
-      link.setAttribute('download', `reporte_inventario_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const csvText = [headers.join(','), ...rows.map((e: any[]) => e.join(','))].join('\n');
+      downloadCsvBlob(`reporte_inventario_${new Date().toISOString().split('T')[0]}.csv`, csvText);
     }
   };
 

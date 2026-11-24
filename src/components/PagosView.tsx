@@ -213,6 +213,10 @@ export default function PagosView({ isDarkMode = false, initialAction = null }: 
       setModalError('Selecciona el método de pago');
       return;
     }
+    if (!Number.isFinite(tasaCambio) || tasaCambio <= 0) {
+      setModalError('La tasa de cambio debe ser mayor a 0');
+      return;
+    }
 
     setSubmitting(true);
     setModalError(null);
