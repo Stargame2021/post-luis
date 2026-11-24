@@ -5,8 +5,12 @@ REM ============================================================================
 REM   TIENDA EXPRESS POS - SCRIPT DE RESPALDO AUTOMÁTICO (POSTGRESQL)
 REM ==============================================================================
 
-set "BACKUP_DIR=c:\app\post-luis\backups"
+for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
+set "BACKUP_DIR=%PROJECT_ROOT%\backups"
 if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
+if not defined DB_USER set "DB_USER=adempiere"
+if not defined DB_DATABASE set "DB_DATABASE=luis"
+if not defined DB_PASSWORD set "DB_PASSWORD=adempiere"
 
 REM Obtener fecha y hora en formato YYYY-MM-DD_HH-MM-SS
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value 2^>nul') do set dt=%%I
@@ -37,7 +41,7 @@ docker ps --filter "name=pos_postgres" --format "{{.Names}}" 2>nul | findstr /i 
 if %errorlevel% equ 0 (
     echo [MODO DETECTADO] Contenedor Docker 'pos_postgres' en ejecucion.
     echo Generando respaldo mediante docker exec pg_dump...
-    docker exec -t pos_postgres pg_dump -U adempiere -d luis --clean --if-exists > "%BACKUP_FILE%"
+    docker exec -t pos_postgres pg_dump -U %DB_USER% -d %DB_DATABASE% --clean --if-exists > "%BACKUP_FILE%"
     goto check_backup
 )
 
@@ -45,8 +49,8 @@ REM 2. Si no corre en Docker, buscar pg_dump nativo instalado en Windows
 where pg_dump >nul 2>nul
 if %errorlevel% equ 0 (
     echo [MODO DETECTADO] pg_dump nativo en Windows.
-    set PGPASSWORD=adempiere
-    pg_dump -h localhost -p 5432 -U adempiere -d luis --clean --if-exists -F p -f "%BACKUP_FILE%"
+    set "PGPASSWORD=%DB_PASSWORD%"
+    pg_dump -h localhost -p 5432 -U %DB_USER% -d %DB_DATABASE% --clean --if-exists -F p -f "%BACKUP_FILE%"
     goto check_backup
 )
 
@@ -60,8 +64,8 @@ for /d %%D in ("C:\Program Files\PostgreSQL\*") do (
 
 if defined FOUND_PG (
     echo [MODO DETECTADO] Encontrado en: !FOUND_PG!
-    set PGPASSWORD=adempiere
-    "!FOUND_PG!" -h localhost -p 5432 -U adempiere -d luis --clean --if-exists -F p -f "%BACKUP_FILE%"
+    set "PGPASSWORD=%DB_PASSWORD%"
+    "!FOUND_PG!" -h localhost -p 5432 -U %DB_USER% -d %DB_DATABASE% --clean --if-exists -F p -f "%BACKUP_FILE%"
     goto check_backup
 )
 

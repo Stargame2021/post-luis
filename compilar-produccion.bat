@@ -7,7 +7,7 @@ echo    COMPILANDO TIENDA EXPRESS POS (MODO PRODUCCION)
 echo ========================================================
 echo.
 
-cd /d "c:\app\post-luis"
+cd /d "%~dp0"
 
 REM Verificar Node.js
 where node >nul 2>nul

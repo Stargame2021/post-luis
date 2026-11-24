@@ -2,7 +2,7 @@
 title Tienda Express POS (Produccion)
 color 0A
 
-cd /d "c:\app\post-luis"
+cd /d "%~dp0"
 
 node server.js
 
