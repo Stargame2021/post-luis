@@ -12,8 +12,8 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Este script se ejecuta automáticamente al crearse el contenedor por primera vez
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Estos scripts SQL se ejecutan automáticamente al crearse el contenedor por primera vez
+      - ./sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-adempiere} -d ${DB_DATABASE:-luis}"]
       interval: 5s
@@ -35,7 +35,12 @@ services:
       DB_DATABASE: ${DB_DATABASE:-luis}
       DB_USER: ${DB_USER:-adempiere}
       DB_PASSWORD: ${DB_PASSWORD:-adempiere}
+      AUTH_SECRET: ${AUTH_SECRET:-}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      DB_CONFIG_PATH: /app/data/.dbconfig.json
       NODE_ENV: production
+    volumes:
+      - app_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,6 +118,8 @@ services:
 
 volumes:
   pgdata:
+    driver: local
+  app_data:
     driver: local
 
 

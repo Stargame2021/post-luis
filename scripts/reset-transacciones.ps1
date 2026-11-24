@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Script de mantenimiento y limpieza de pruebas para Tienda Express POS en Docker.
 .DESCRIPTION
@@ -13,7 +13,9 @@ param(
     [ValidateSet("ventas", "compras", "ambos", "todo")]
     [string]$Accion = "ambos",
     [switch]$ResetStock = $false,
-    [double]$StockValor = 0
+    [double]$StockValor = 0,
+    [switch]$ResetBalances = $false,
+    [double]$SaldoValor = 0
 )
 
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -38,26 +40,33 @@ Write-Host "Contenedor detectado: $ContainerName" -ForegroundColor Green
 Write-Host "Base de Datos: $DbName | Usuario: $DbUser" -ForegroundColor Gray
 Write-Host "Acción solicitada: $Accion" -ForegroundColor Yellow
 
-$sql = "BEGIN; "
+$sqlStatements = @("BEGIN;")
 
 if ($Accion -eq "ventas" -or $Accion -eq "ambos" -or $Accion -eq "todo") {
-    $sql += "TRUNCATE TABLE t_pedidolinea, t_pedido RESTART IDENTITY CASCADE; "
+    $sqlStatements += "TRUNCATE TABLE t_pedidolinea, t_pedido RESTART IDENTITY CASCADE;"
 }
 
 if ($Accion -eq "compras" -or $Accion -eq "ambos" -or $Accion -eq "todo") {
-    $sql += "TRUNCATE TABLE t_compralinea, t_compra RESTART IDENTITY CASCADE; "
+    $sqlStatements += "TRUNCATE TABLE t_compralinea, t_compra RESTART IDENTITY CASCADE;"
 }
 
 if ($ResetStock) {
-    $sql += "UPDATE m_producto SET stock_actual = $StockValor; "
+    $stockFormatted = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0}", $StockValor)
+    $sqlStatements += "UPDATE m_producto SET stock_actual = $stockFormatted;"
 }
 
-$sql += "COMMIT;"
+if ($ResetBalances) {
+    $saldoFormatted = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0}", $SaldoValor)
+    $sqlStatements += "UPDATE m_cuentabancaria SET saldo_actual = $saldoFormatted;"
+}
+
+$sqlStatements += "COMMIT;"
+$sql = $sqlStatements -join " "
 
 Write-Host "`nEjecutando sentencia en PostgreSQL dentro del contenedor..." -ForegroundColor Cyan
 
-$cmd = "docker exec -i $ContainerName psql -U $DbUser -d $DbName -c `"$sql`""
-Invoke-Expression $cmd
+$dockerArgs = @("exec", "-i", $ContainerName, "psql", "-U", $DbUser, "-d", $DbName, "-v", "ON_ERROR_STOP=1", "-c", $sql)
+& docker @dockerArgs
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`n[EXITO] Operación completada con éxito." -ForegroundColor Green
@@ -66,9 +75,11 @@ if ($LASTEXITCODE -eq 0) {
     if ($ResetStock) {
         Write-Host "- Stock de productos actualizado a $StockValor." -ForegroundColor White
     }
+    if ($ResetBalances) {
+        Write-Host "- Saldos de cuentas bancarias y cajas actualizados a $SaldoValor." -ForegroundColor White
+    }
 } else {
     Write-Host "`n[ERROR] Ocurrió un error al ejecutar la limpieza en la base de datos." -ForegroundColor Red
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-

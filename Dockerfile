@@ -31,12 +31,15 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# Crear usuario no privilegiado para seguridad
+# Crear usuario no privilegiado y carpeta escribible para configuracion/secretos
 RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
+    adduser --system --uid 1001 nextjs && \
+    mkdir -p /app/data && \
+    chown nextjs:nodejs /app /app/data
 
-# Copiar archivos estáticos y compilados standalone
+# Copiar archivos estáticos, SQL canonico y compilados standalone
 COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/sql ./sql
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
