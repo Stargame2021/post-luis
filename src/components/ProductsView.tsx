@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Producto, Impuesto, Presentacion } from '@/types';
 import { formatStockDesglose, formatStockDesgloseCompleto, getOpcionesUnidad, getSegmentacionExistencias } from '@/lib/unidades';
 import { calculateBaseFromFinalPrice } from '@/lib/excel-import';
+import { compressImageFileToDataUrl } from '@/lib/image-compress';
 import PosNumberInput from '@/components/PosNumberInput';
 import { useConfirm, useToast } from '@/components/ui/ToastProvider';
 import {
@@ -21,6 +22,7 @@ import {
   Scale,
   Boxes,
   FileSpreadsheet,
+  ImagePlus,
 } from 'lucide-react';
 
 interface ProductsViewProps {
@@ -51,9 +53,11 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
     costo_promedio_usd: '0',
     impuesto_id: 1,
     unidad_base: 'Unidad',
+    imagen_url: '' as string,
     presentaciones: [] as PresFormItem[],
     activo: true,
   });
+  const [compressingImg, setCompressingImg] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [pvpFinalDraft, setPvpFinalDraft] = useState<number | null>(null);
@@ -88,6 +92,7 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
       costo_promedio_usd: '0',
       impuesto_id: taxes.length > 0 ? taxes[0].id : 1,
       unidad_base: 'Unidad',
+      imagen_url: '',
       presentaciones: [],
       activo: true,
     });
@@ -108,6 +113,7 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
       costo_promedio_usd: String(p.costo_promedio_usd ?? 0),
       impuesto_id: p.impuesto_id || (taxes[0]?.id ?? 1),
       unidad_base: p.unidad_base || 'Unidad',
+      imagen_url: p.imagen_url || '',
       presentaciones: (p.presentaciones || []).map((pr) => ({
         id: pr.id,
         nombre: pr.nombre,
@@ -188,6 +194,7 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
         costo_promedio_usd: Number(formData.costo_promedio_usd) || 0,
         impuesto_id: Number(formData.impuesto_id) || 1,
         unidad_base: formData.unidad_base.trim() || 'Unidad',
+        imagen_url: formData.imagen_url || null,
         presentaciones: formData.presentaciones.map((pr) => ({
           ...(pr.id ? { id: pr.id } : {}),
           nombre: pr.nombre.trim(),
@@ -467,20 +474,94 @@ export default function ProductsView({ products, onRefresh, onNavigateImportExce
 
             <form onSubmit={handleSubmit} className="space-y-4">
               {/* Nombre del Producto */}
-              <div>
-                <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
-                  Nombre del Producto *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: Harina de Maíz Precocida"
-                  value={formData.nombre}
-                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
-                  className={`w-full px-3 py-2 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
-                    isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
-                  }`}
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-start">
+                <div className="sm:col-span-8">
+                  <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
+                    Nombre del Producto *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej: Harina de Maíz Precocida"
+                    value={formData.nombre}
+                    onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
+                    className={`w-full px-3 py-2 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+                      isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+                    }`}
+                  />
+                </div>
+
+                {/* Imagen ligera comprimida (opcional) */}
+                <div className="sm:col-span-4">
+                  <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-400">
+                    Imagen POS (ligera)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${
+                        isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      {formData.imagen_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={formData.imagen_url}
+                          alt="Vista previa"
+                          className="w-full h-full object-contain p-0.5"
+                        />
+                      ) : (
+                        <Package className="w-4 h-4 text-slate-400" />
+                      )}
+                    </div>
+                    <label
+                      className={`inline-flex items-center gap-1 px-2.5 py-2 rounded-xl border text-xs font-semibold cursor-pointer transition ${
+                        isDarkMode
+                          ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                          : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {compressingImg ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <ImagePlus className="w-3.5 h-3.5" />
+                      )}
+                      <span>{formData.imagen_url ? 'Cambiar' : 'Subir'}</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        disabled={compressingImg}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (!file) return;
+                          setCompressingImg(true);
+                          setErrorMsg('');
+                          try {
+                            const compressed = await compressImageFileToDataUrl(file);
+                            setFormData((prev) => ({ ...prev, imagen_url: compressed }));
+                          } catch (err) {
+                            setErrorMsg(
+                              err instanceof Error ? err.message : 'No se pudo comprimir la imagen.'
+                            );
+                          } finally {
+                            setCompressingImg(false);
+                          }
+                        }}
+                      />
+                    </label>
+                    {formData.imagen_url && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData((prev) => ({ ...prev, imagen_url: '' }))}
+                        title="Quitar imagen"
+                        className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Unidad Base, Precio Base, Precio Final y Alícuota */}

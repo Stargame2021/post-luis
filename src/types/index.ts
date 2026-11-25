@@ -37,6 +37,7 @@ export interface Producto {
   impuesto_nombre?: string;
   impuesto_porcentaje?: number | string;
   unidad_base?: string;
+  imagen_url?: string | null;
   presentaciones?: Presentacion[];
   activo: boolean;
   creado_en?: string;

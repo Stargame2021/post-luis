@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { PoolClient } from 'pg';
 import { getPool, query } from '@/lib/db';
 import { requireAuth } from '@/lib/api-auth';
+import { validateProductImageUrl } from '@/lib/image-compress';
 
 // Columnas comunes del producto (incluye unidad base y presentaciones activas como JSON)
 const PRODUCT_SELECT = `
@@ -15,6 +16,7 @@ const PRODUCT_SELECT = `
     COALESCE(i.nombre, 'IVA 16%') as impuesto_nombre,
     COALESCE(i.porcentaje, 16.00)::numeric as impuesto_porcentaje,
     COALESCE(p.unidad_base, 'Unidad') as unidad_base,
+    p.imagen_url,
     COALESCE((
       SELECT json_agg(json_build_object(
                'id', pp.id, 'nombre', pp.nombre, 'factor', pp.factor, 'precio_usd', pp.precio_usd
@@ -151,6 +153,7 @@ export async function POST(req: Request) {
       impuesto_id = 1,
       activo = true,
       unidad_base = 'Unidad',
+      imagen_url = null,
       presentaciones = [],
     } = body;
 
@@ -170,6 +173,7 @@ export async function POST(req: Request) {
     }
 
     const presList = parsePresentaciones(presentaciones);
+    const validatedImageUrl = validateProductImageUrl(imagen_url);
     const stock = Number(stock_actual) || 0;
     const costo = Number(costo_promedio_usd) || 0;
     const taxId = Number(impuesto_id) || 1;
@@ -177,10 +181,10 @@ export async function POST(req: Request) {
 
     await client.query('BEGIN');
     const ins = await client.query(
-      `INSERT INTO m_producto (nombre, precio_usd, stock_actual, costo_promedio_usd, impuesto_id, activo, unidad_base)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO m_producto (nombre, precio_usd, stock_actual, costo_promedio_usd, impuesto_id, activo, unidad_base, imagen_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [String(nombre).trim(), price, stock, costo, taxId, Boolean(activo), unidad]
+      [String(nombre).trim(), price, stock, costo, taxId, Boolean(activo), unidad, validatedImageUrl]
     );
     const newId = Number(ins.rows[0].id);
     await syncPresentaciones(client, newId, presList);
@@ -247,6 +251,8 @@ export async function PUT(req: Request) {
       unidad_base !== undefined && unidad_base !== null
         ? String(unidad_base).trim() || 'Unidad'
         : null;
+    const hasImagenField = Object.prototype.hasOwnProperty.call(body, 'imagen_url');
+    const validatedImageUrl = hasImagenField ? validateProductImageUrl(body.imagen_url) : null;
     const presList = presentaciones !== undefined ? parsePresentaciones(presentaciones) : null;
 
     await client.query('BEGIN');
@@ -258,8 +264,9 @@ export async function PUT(req: Request) {
            costo_promedio_usd = COALESCE($4, costo_promedio_usd),
            impuesto_id = COALESCE($5, impuesto_id),
            activo = COALESCE($6, activo),
-           unidad_base = COALESCE($7, unidad_base)
-       WHERE id = $8
+           unidad_base = COALESCE($7, unidad_base),
+           imagen_url = CASE WHEN $8::boolean THEN $9 ELSE imagen_url END
+       WHERE id = $10
        RETURNING id`,
       [
         String(nombre).trim(),
@@ -269,6 +276,8 @@ export async function PUT(req: Request) {
         taxId,
         activo !== undefined && activo !== null ? Boolean(activo) : null,
         unidad,
+        hasImagenField,
+        validatedImageUrl,
         Number(id),
       ]
     );
