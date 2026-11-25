@@ -39,3 +39,48 @@ input[type="number"]::-webkit-inner-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
 }
+
+/* Micro-flash 180ms para líneas recién agregadas/actualizadas en POS */
+@keyframes pos-flash {
+  0% {
+    background-color: rgba(21, 128, 61, 0.22);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.pos-flash {
+  animation: pos-flash 180ms ease-out;
+}
+
+/* Impresión térmica limpia de 80mm para recibos POS */
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .pos-thermal-receipt,
+  .pos-thermal-receipt * {
+    visibility: visible;
+  }
+
+  .pos-thermal-receipt {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-width: 80mm;
+    padding: 3mm;
+    margin: 0;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}

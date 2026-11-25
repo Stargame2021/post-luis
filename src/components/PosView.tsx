@@ -1,52 +1,57 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Producto, Tasa, Tercero, TipoPago, CondicionPago, CuentaBancaria, TipoOperacionPago } from '@/types';
-import { getOpcionesUnidad, getOpcionUnidad, formatStockDesglose } from '@/lib/unidades';
-import { usePosCart, type CartItem } from '@/hooks/usePosCart';
-import PosNumberInput from '@/components/PosNumberInput';
-import Dialog from '@/components/ui/Dialog';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  ShoppingCart,
-  Plus,
-  Minus,
-  Trash2,
-  User,
-  CheckCircle2,
-  AlertCircle,
-  Receipt,
-  Search,
-  Loader2,
-  UserPlus,
-  X,
-} from 'lucide-react';
+  Producto,
+  Tasa,
+  Tercero,
+  TipoPago,
+  CondicionPago,
+  CuentaBancaria,
+  TipoOperacionPago,
+} from '@/types';
+import { usePosCart, type CartItem } from '@/hooks/usePosCart';
+import { usePosKeyboard, type PosKeyAction } from '@/hooks/usePosKeyboard';
+import { calculateDualChange, round2 } from '@/lib/pos-calculations';
+import { filterPosProducts } from '@/lib/pos-search';
+import {
+  isPosSoundEnabled,
+  playPosAddBeep,
+  playPosErrorTone,
+  playPosSuccessChime,
+  setPosSoundEnabled,
+} from '@/lib/posSound';
+import { useConfirm, useToast } from '@/components/ui/ToastProvider';
+import PosTopBar, { resolveDefaultClient } from '@/components/pos/PosTopBar';
+import PosClientSearchModal from '@/components/pos/PosClientSearchModal';
+import PosQuickClientModal from '@/components/pos/PosQuickClientModal';
+import PosShortcutsModal from '@/components/pos/PosShortcutsModal';
+import PosCatalogPanel, { CATALOG_PAGE_SIZE } from '@/components/pos/PosCatalogPanel';
+import PosCartPanel from '@/components/pos/PosCartPanel';
+import PosParkedOrdersModal, { type ParkedSale } from '@/components/pos/PosParkedOrdersModal';
+import PosCheckoutModal from '@/components/pos/PosCheckoutModal';
+import PosReceiptModal, { type CompletedOrderReceipt } from '@/components/pos/PosReceiptModal';
 
 export type { CartItem };
 
-interface CompletedOrderLine {
-  lineId: string;
-  nombre: string;
-  presentacion_nombre: string;
-  cantidad: number;
-  precio: number;
-  subtotal: number;
-  taxPct: number;
+const PARKED_SALES_KEY = 'pos_parked_sales_v1';
+
+function loadParkedSales(): ParkedSale[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.sessionStorage.getItem(PARKED_SALES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ParkedSale[]) : [];
+  } catch {
+    return [];
+  }
 }
 
-interface CompletedOrderReceipt {
-  id: number;
-  tasa_cambio_aplicada: number | string;
-  base_imponible_usd?: number | string;
-  monto_impuesto_usd?: number | string;
-  total_usd: number | string;
-  total_moneda_local: number | string;
-  condicion_pago: CondicionPago;
-  tipo_pago_nombre: string | null;
-  referencia_pago: string | null;
-  fecha_vencimiento: string | null;
-  cliente_nombre: string;
-  cliente_identificacion: string;
-  lineas: CompletedOrderLine[];
+function getDefaultDueDate(days = 15): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
 }
 
 interface PosViewProps {
@@ -70,36 +75,36 @@ export default function PosView({
   products,
   currentRate,
   onOrderCompleted,
-  onNavigatePagos: _onNavigatePagos,
+  onOpenRates,
   isDarkMode = false,
   storeName = 'Tienda Express',
 }: PosViewProps) {
-  void _onNavigatePagos;
+  const { showToast } = useToast();
+  const confirmAction = useConfirm();
+
   const [clients, setClients] = useState<Tercero[]>([]);
-  const [selectedClientId, setSelectedClientId] = useState<number>(1);
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [initialLoadError, setInitialLoadError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+
   const [lastCompletedOrder, setLastCompletedOrder] = useState<CompletedOrderReceipt | null>(null);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [showClientSearchModal, setShowClientSearchModal] = useState(false);
+  const [showQuickClientModal, setShowQuickClientModal] = useState(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showParkedModal, setShowParkedModal] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
-  // Presentación seleccionada activamente en cada tarjeta de producto (por defecto null = unidad base)
+  const [catalogPage, setCatalogPage] = useState(1);
+  const [activeZone, setActiveZone] = useState<'catalog' | 'cart'>('catalog');
+  const [parkedSales, setParkedSales] = useState<ParkedSale[]>(() => loadParkedSales());
   const [cardSelectedPres, setCardSelectedPres] = useState<Record<number, number | null>>({});
-
-  // Allow negative stock toggle
   const [permitirStockNegativo, setPermitirStockNegativo] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => isPosSoundEnabled());
 
-  // Quick Client Creation Modal
-  const [showQuickClientModal, setShowQuickClientModal] = useState(false);
-  const [quickClientData, setQuickClientData] = useState({
-    identificacion: '',
-    razon_social_nombre: '',
-    telefono: '',
-    email: '',
-  });
-
-  // Tipos y Términos de Pago
+  // Tipos y términos de pago
   const [tiposPago, setTiposPago] = useState<TipoPago[]>([]);
   const [cuentasBancarias, setCuentasBancarias] = useState<CuentaBancaria[]>([]);
   const [selectedCuentaBancariaId, setSelectedCuentaBancariaId] = useState<number | null>(null);
@@ -107,85 +112,134 @@ export default function PosView({
   const [registrarPago, setRegistrarPago] = useState<boolean>(true);
   const [selectedTipoPagoId, setSelectedTipoPagoId] = useState<number | null>(null);
   const [referenciaPago, setReferenciaPago] = useState('');
-  const [montoAbono, setMontoAbono] = useState<string>('');
-  const [montoRecibido, setMontoRecibido] = useState<string>('');
-  const [fechaVencimiento, setFechaVencimiento] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 15);
-    return d.toISOString().split('T')[0];
-  });
+  const [montoAbono, setMontoAbono] = useState('');
+  const [montoRecibido, setMontoRecibido] = useState('');
+  const [fechaVencimiento, setFechaVencimiento] = useState(() => getDefaultDueDate(15));
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const submittingOrderRef = useRef(false);
 
   const rateValue = currentRate ? Number(currentRate.tasa) : 0;
 
+  const notify = useCallback(
+    (n: { type: 'success' | 'error'; text: string }) => {
+      if (n.type === 'error') playPosErrorTone();
+      showToast(n.type, n.text);
+    },
+    [showToast]
+  );
+
+  const handleToggleSound = useCallback(() => {
+    setSoundEnabled((prev) => {
+      const next = !prev;
+      setPosSoundEnabled(next);
+      return next;
+    });
+  }, []);
+
+  const focusScanner = useCallback(() => {
+    const el = searchInputRef.current;
+    if (el) {
+      el.focus();
+      el.select();
+    }
+  }, []);
+
   const {
     cart,
-    totals: {
-      baseImponibleUsd,
-      baseExentaUsd,
-      baseGravadaUsd,
-      montoImpuestoUsd,
-      totalUsd,
-      totalLocal,
-    },
+    totals,
     makeLineId,
     getCartBaseUnits,
     addToCart: addItemToCart,
     updateQuantity,
     setDirectQuantity,
-    setProductLineQuantity,
     changeItemPresentation,
     removeFromCart,
     clearCart,
+    replaceCart,
   } = usePosCart({
     permitirStockNegativo,
     rateValue,
-    onNotify: setNotification,
+    products,
+    onNotify: notify,
   });
 
+  const { totalUsd, totalLocal } = totals;
+
   const addToCart = useCallback(
-    (product: Producto, presIdOverride?: number | null) => {
+    (product: Producto, presIdOverride?: number | null, qty = 1) => {
       const presId =
         presIdOverride !== undefined ? presIdOverride : (cardSelectedPres[product.id] ?? null);
-      addItemToCart(product, presId);
+      addItemToCart(product, presId, qty);
+      playPosAddBeep();
     },
     [addItemToCart, cardSelectedPres]
   );
 
-  // Filtrar cuentas o cajas según el tipo de pago seleccionado en el POS
-  const posSelectedTp = tiposPago.find((t) => t.id === selectedTipoPagoId);
-  const posIsEfectivo = posSelectedTp?.codigo?.startsWith('EFECTIVO');
-  const posTargetMoneda = posSelectedTp ? posSelectedTp.moneda : 'USD';
+  const handleSelectCardPres = useCallback((productId: number, presId: number | null) => {
+    setCardSelectedPres((prev) => ({ ...prev, [productId]: presId }));
+  }, []);
 
-  const posCuentasCompatibles = cuentasBancarias.filter((cb) => {
-    const matchTipo = posIsEfectivo ? cb.banco_tipo === 'CAJA' : cb.banco_tipo === 'BANCO';
-    const matchMoneda = cb.moneda === posTargetMoneda;
-    return matchTipo && matchMoneda;
-  });
+  const posSelectedTp = useMemo(
+    () => tiposPago.find((t) => t.id === selectedTipoPagoId) ?? null,
+    [tiposPago, selectedTipoPagoId]
+  );
+  const posIsEfectivo = Boolean(posSelectedTp?.codigo?.startsWith('EFECTIVO'));
+  const posTargetMoneda: 'USD' | 'VES' = posSelectedTp?.moneda === 'VES' ? 'VES' : 'USD';
 
-  // Cambiar condición de pago y auto-ajustar fecha de vencimiento según los días
-  const handleSelectCondicionPago = (cond: CondicionPago) => {
+  const posCuentasCompatibles = useMemo(
+    () =>
+      cuentasBancarias.filter((cb) => {
+        const matchTipo = posIsEfectivo ? cb.banco_tipo === 'CAJA' : cb.banco_tipo === 'BANCO';
+        const matchMoneda = cb.moneda === posTargetMoneda;
+        return matchTipo && matchMoneda;
+      }),
+    [cuentasBancarias, posIsEfectivo, posTargetMoneda]
+  );
+
+  const effectiveCuentaBancariaId = useMemo(() => {
+    if (posCuentasCompatibles.length === 0) return null;
+    if (posCuentasCompatibles.some((c) => c.id === selectedCuentaBancariaId)) {
+      return selectedCuentaBancariaId;
+    }
+    return posCuentasCompatibles[0].id;
+  }, [posCuentasCompatibles, selectedCuentaBancariaId]);
+
+  const handleSelectCondicionPago = useCallback((cond: CondicionPago) => {
     setCondicionPago(cond);
+    setCheckoutError(null);
     if (cond === 'CONTADO') {
       setRegistrarPago(true);
+      setMontoAbono('');
     } else {
-      // Si es crédito, por defecto no es obligatorio registrar el cobro en el acto
       setRegistrarPago(false);
-      const d = new Date();
-      if (cond === 'CREDITO_7') d.setDate(d.getDate() + 7);
-      else if (cond === 'CREDITO_15') d.setDate(d.getDate() + 15);
-      else if (cond === 'CREDITO_30') d.setDate(d.getDate() + 30);
-      else if (cond === 'CREDITO_45') d.setDate(d.getDate() + 45);
-      else d.setDate(d.getDate() + 15); // CREDITO general
-      setFechaVencimiento(d.toISOString().split('T')[0]);
+      setMontoRecibido('');
+      const days =
+        cond === 'CREDITO_7'
+          ? 7
+          : cond === 'CREDITO_30'
+          ? 30
+          : cond === 'CREDITO_45'
+          ? 45
+          : 15;
+      setFechaVencimiento(getDefaultDueDate(days));
     }
-  };
+  }, []);
 
-  // Load payment methods, accounts, and clients
+  // Al cambiar de método de pago: limpiar monto recibido, referencia y abono (P1-5)
+  const handleSelectTipoPago = useCallback((tpId: number) => {
+    setSelectedTipoPagoId(tpId);
+    setMontoRecibido('');
+    setReferenciaPago('');
+    setMontoAbono('');
+    setCheckoutError(null);
+  }, []);
+
   const loadClients = useCallback(async () => {
     try {
       const res = await fetch('/api/terceros?tipo=CLIENTE&active=true');
       const data = await res.json();
-      if (data.success && data.terceros) {
+      if (data.success && Array.isArray(data.terceros)) {
         setClients(data.terceros);
       }
     } catch (e) {
@@ -202,6 +256,9 @@ export default function PosView({
           fetch('/api/cuentas-bancarias'),
           fetch('/api/terceros?tipo=CLIENTE&active=true'),
         ]);
+        if (!tpRes.ok || !cbRes.ok || !terRes.ok) {
+          throw new Error('No se pudieron cargar los catálogos operativos del POS.');
+        }
         const [tpData, cbData, terData] = await Promise.all([
           tpRes.json(),
           cbRes.json(),
@@ -209,6 +266,7 @@ export default function PosView({
         ]);
         if (!active) return;
 
+        setInitialLoadError(null);
         if (tpData.success && Array.isArray(tpData.tiposPago)) {
           setTiposPago(tpData.tiposPago);
           if (tpData.tiposPago.length > 0) {
@@ -217,18 +275,20 @@ export default function PosView({
         }
         if (cbData.success && Array.isArray(cbData.cuentas)) {
           setCuentasBancarias(cbData.cuentas);
-          if (cbData.cuentas.length > 0) {
-            setSelectedCuentaBancariaId((prev) => prev ?? cbData.cuentas[0].id);
-          }
         }
         if (terData.success && Array.isArray(terData.terceros)) {
           setClients(terData.terceros);
-          if (terData.terceros.length > 0) {
-            setSelectedClientId((prev) => prev || terData.terceros[0].id);
+          const defaultClient = resolveDefaultClient(terData.terceros);
+          if (defaultClient) {
+            setSelectedClientId((prev) => prev ?? defaultClient.id);
           }
         }
       } catch (e) {
+        if (!active) return;
+        const msg = e instanceof Error ? e.message : 'Error cargando datos iniciales de POS.';
         console.error('Error cargando datos iniciales de POS:', e);
+        setInitialLoadError(msg);
+        showToast('error', msg);
       }
     };
 
@@ -236,68 +296,168 @@ export default function PosView({
     return () => {
       active = false;
     };
+  }, [reloadTick, showToast]);
+
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => focusScanner());
+    return () => window.cancelAnimationFrame(raf);
+  }, [focusScanner]);
+
+  const filteredCount = useMemo(
+    () => filterPosProducts(products, searchTerm).length,
+    [products, searchTerm]
+  );
+  const totalCatalogPages = Math.max(1, Math.ceil(filteredCount / CATALOG_PAGE_SIZE));
+
+  const persistParkedSales = useCallback((next: ParkedSale[]) => {
+    setParkedSales(next);
+    try {
+      window.sessionStorage.setItem(PARKED_SALES_KEY, JSON.stringify(next));
+    } catch {
+      // ignore storage errors
+    }
   }, []);
 
-  const activeProducts = products.filter((p) => p.activo);
-  const filteredProducts = activeProducts.filter((p) =>
-    p.nombre.toLowerCase().includes(searchTerm.toLowerCase())
+  const selectedClient = useMemo(
+    () => clients.find((c) => c.id === selectedClientId) ?? resolveDefaultClient(clients),
+    [clients, selectedClientId]
   );
 
-  const selectedClient = clients.find((c) => c.id === selectedClientId);
+  const handleParkCurrentSale = useCallback(() => {
+    if (cart.length === 0) return;
+    const nowLabel = new Date().toLocaleTimeString('es-VE', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const entry: ParkedSale = {
+      id: `park-${Date.now()}`,
+      createdAt: nowLabel,
+      clientId: selectedClient?.id ?? selectedClientId,
+      clientLabel: selectedClient
+        ? `${selectedClient.identificacion} — ${selectedClient.razon_social_nombre}`
+        : 'Cliente Genérico',
+      items: cart,
+      totalUsd,
+    };
+    persistParkedSales([entry, ...parkedSales].slice(0, 15));
+    clearCart();
+    const defaultClient = resolveDefaultClient(clients);
+    if (defaultClient) setSelectedClientId(defaultClient.id);
+    showToast('info', 'Venta aparcada en espera [F9].');
+    focusScanner();
+  }, [
+    cart,
+    clearCart,
+    clients,
+    focusScanner,
+    parkedSales,
+    persistParkedSales,
+    selectedClient,
+    selectedClientId,
+    showToast,
+    totalUsd,
+  ]);
 
-  const handleOpenCheckoutModal = () => {
+  const handleRecallParkedSale = useCallback(
+    (saleId: string) => {
+      const target = parkedSales.find((s) => s.id === saleId);
+      if (!target) return;
+      replaceCart(target.items);
+      if (target.clientId) setSelectedClientId(target.clientId);
+      persistParkedSales(parkedSales.filter((s) => s.id !== saleId));
+      showToast('success', 'Venta en espera recuperada.');
+    },
+    [parkedSales, persistParkedSales, replaceCart, showToast]
+  );
+
+  const handleDeleteParkedSale = useCallback(
+    (saleId: string) => {
+      persistParkedSales(parkedSales.filter((s) => s.id !== saleId));
+      showToast('info', 'Venta en espera descartada.');
+    },
+    [parkedSales, persistParkedSales, showToast]
+  );
+
+  const handleRequestClearCart = useCallback(() => {
+    if (cart.length === 0) return;
+    void confirmAction({
+      title: 'Vaciar carrito',
+      message: `¿Deseas eliminar los ${cart.length} artículos del carrito actual?`,
+      confirmLabel: 'Sí, vaciar',
+      cancelLabel: 'Cancelar',
+      destructive: true,
+    }).then((accepted) => {
+      if (accepted) {
+        clearCart();
+        showToast('info', 'Carrito vaciado.');
+        focusScanner();
+      }
+    });
+  }, [cart.length, clearCart, confirmAction, focusScanner, showToast]);
+
+  const handleOpenCheckoutModal = useCallback(() => {
     if (cart.length === 0) {
-      setNotification({ type: 'error', text: 'El carrito está vacío.' });
+      showToast('error', 'El carrito está vacío.');
       return;
     }
-
     if (!currentRate || rateValue <= 0) {
-      setNotification({
-        type: 'error',
-        text: 'Debes registrar la tasa de cambio del día antes de procesar ventas.',
-      });
+      showToast('error', 'Debes registrar la tasa de cambio del día antes de procesar ventas.');
       return;
     }
-
     setCheckoutError(null);
     setMontoAbono('');
     setMontoRecibido('');
     setShowCheckoutModal(true);
-  };
+  }, [cart.length, currentRate, rateValue, showToast]);
 
-  const handleProcessOrder = async () => {
+  const handleProcessOrder = useCallback(async () => {
+    if (submittingOrderRef.current) return;
+
     if (cart.length === 0) {
       setCheckoutError('El carrito está vacío.');
       return;
     }
-
     if (!currentRate || rateValue <= 0) {
       setCheckoutError('Debes registrar la tasa de cambio del día antes de procesar ventas.');
       return;
     }
 
     if (registrarPago) {
-      const currentTp = tiposPago.find((t) => t.id === selectedTipoPagoId);
-      if (currentTp?.requiere_referencia && !referenciaPago.trim()) {
-        setCheckoutError(`El método "${currentTp.nombre}" requiere indicar número de referencia.`);
+      if (posSelectedTp?.requiere_referencia && !referenciaPago.trim()) {
+        setCheckoutError(
+          `El método "${posSelectedTp.nombre}" requiere indicar número de referencia.`
+        );
         return;
       }
 
+      const maxAllowed = posTargetMoneda === 'VES' ? totalLocal : totalUsd;
       const abonoNum = parseFloat(montoAbono);
-      if (montoAbono && Number.isFinite(abonoNum) && abonoNum > 0) {
-        const maxAllowed = currentTp?.moneda === 'VES' ? totalLocal : totalUsd;
-        if (abonoNum > maxAllowed + 0.01) {
+
+      if (condicionPago !== 'CONTADO') {
+        if (!montoAbono.trim() || !Number.isFinite(abonoNum) || abonoNum <= 0) {
           setCheckoutError(
-            `El monto del abono (${abonoNum.toFixed(2)}) no puede superar el total del pedido (${maxAllowed.toFixed(2)} ${currentTp?.moneda || 'USD'}).`
+            'En ventas a crédito con abono inicial, debes ingresar un monto de abono mayor a 0.'
           );
+          return;
+        }
+        if (abonoNum >= maxAllowed - 0.005) {
+          setCheckoutError(
+            `El abono inicial (${abonoNum.toFixed(2)}) debe ser menor al total (${maxAllowed.toFixed(2)} ${posTargetMoneda}). Para pago completo usa Contado.`
+          );
+          return;
+        }
+      } else if (posIsEfectivo) {
+        const recNum = parseFloat(montoRecibido) || 0;
+        if (recNum > 0 && recNum < maxAllowed - 0.005) {
+          setCheckoutError('El monto recibido es menor al total por cobrar.');
           return;
         }
       }
     }
 
+    submittingOrderRef.current = true;
     setLoading(true);
     setCheckoutError(null);
-    setNotification(null);
 
     try {
       const itemsPayload = cart.map((item) => ({
@@ -307,11 +467,19 @@ export default function PosView({
         presentacion_id: item.presentacion_id,
       }));
 
+      const parsedAbono =
+        registrarPago &&
+        montoAbono &&
+        Number.isFinite(parseFloat(montoAbono)) &&
+        parseFloat(montoAbono) > 0
+          ? parseFloat(montoAbono)
+          : null;
+
       const res = await fetch('/api/pedidos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tercero_id: selectedClientId || 1,
+          tercero_id: selectedClient?.id ?? selectedClientId ?? undefined,
           cliente_nombre: selectedClient?.razon_social_nombre || 'Cliente Genérico',
           tasa_cambio_aplicada: rateValue,
           permitir_stock_negativo: permitirStockNegativo,
@@ -319,9 +487,9 @@ export default function PosView({
           tipo_pago_id: registrarPago ? selectedTipoPagoId : null,
           referencia_pago: registrarPago && referenciaPago.trim() ? referenciaPago.trim() : undefined,
           fecha_vencimiento: condicionPago !== 'CONTADO' ? fechaVencimiento : undefined,
-          cuenta_bancaria_id: registrarPago ? selectedCuentaBancariaId : null,
+          cuenta_bancaria_id: registrarPago ? effectiveCuentaBancariaId : null,
           registrar_pago: registrarPago,
-          monto_pago: registrarPago && montoAbono && parseFloat(montoAbono) > 0 ? parseFloat(montoAbono) : null,
+          monto_pago: parsedAbono,
           items: itemsPayload,
         }),
       });
@@ -329,1243 +497,357 @@ export default function PosView({
       const data = await res.json();
 
       if (data.success) {
+        const recNum = parseFloat(montoRecibido) || 0;
+        const changeSummary =
+          condicionPago === 'CONTADO' && registrarPago && posIsEfectivo && recNum > 0
+            ? calculateDualChange({
+                totalUsd,
+                totalLocal,
+                rateValue,
+                receivedAmount: recNum,
+                currency: posTargetMoneda,
+              })
+            : null;
+
+        setShowCheckoutModal(false);
         setLastCompletedOrder({
           ...data.order,
           condicion_pago: condicionPago,
-          tipo_pago_nombre: registrarPago ? (tiposPago.find(t => t.id === selectedTipoPagoId)?.nombre || null) : 'Crédito Pendiente',
+          tipo_pago_nombre: registrarPago
+            ? posSelectedTp?.nombre || null
+            : 'Crédito Pendiente',
           referencia_pago: registrarPago && referenciaPago.trim() ? referenciaPago.trim() : null,
           fecha_vencimiento: condicionPago !== 'CONTADO' ? fechaVencimiento : null,
           cliente_nombre: selectedClient?.razon_social_nombre || 'Cliente Genérico',
           cliente_identificacion: selectedClient?.identificacion || 'V-00000000',
+          vuelto_usd: changeSummary && !changeSummary.isShort ? changeSummary.changeUsd : 0,
+          vuelto_local: changeSummary && !changeSummary.isShort ? changeSummary.changeLocal : 0,
+          recibido_monto: recNum > 0 ? recNum : undefined,
+          recibido_moneda: recNum > 0 ? posTargetMoneda : undefined,
           lineas: cart.map((c) => {
             const rawTax = c.producto.impuesto_porcentaje;
             const taxPct = rawTax !== undefined && rawTax !== null ? Number(rawTax) : 16.0;
-            const sub = c.precio_unitario_usd * c.cantidad;
             return {
               lineId: c.id,
-              nombre: c.presentacion_id ? `${c.producto.nombre} (${c.presentacion_nombre})` : c.producto.nombre,
+              nombre: c.presentacion_id
+                ? `${c.producto.nombre} (${c.presentacion_nombre})`
+                : c.producto.nombre,
               presentacion_nombre: c.presentacion_nombre,
               cantidad: c.cantidad,
               precio: c.precio_unitario_usd,
-              subtotal: sub,
+              subtotal: round2(c.precio_unitario_usd * c.cantidad),
               taxPct,
             };
           }),
         });
+
         clearCart();
-        setNotification({
-          type: 'success',
-          text: `¡Venta #${data.order.id} registrada correctamente e inventario descontado!`,
-        });
+        const defaultClient = resolveDefaultClient(clients);
+        if (defaultClient) setSelectedClientId(defaultClient.id);
+        setCondicionPago('CONTADO');
+        setRegistrarPago(true);
+        setReferenciaPago('');
+        setMontoAbono('');
+        setMontoRecibido('');
+        setPermitirStockNegativo(false);
+        setFechaVencimiento(getDefaultDueDate(15));
+        playPosSuccessChime();
+        showToast('success', `¡Venta #${data.order.id} registrada correctamente!`);
         onOrderCompleted();
       } else {
+        playPosErrorTone();
         setCheckoutError(data.message || 'Error al guardar la venta');
-        setNotification({ type: 'error', text: data.message || 'Error al guardar la venta' });
+        showToast('error', data.message || 'Error al guardar la venta');
       }
     } catch {
-      setCheckoutError('Error de conexión al procesar el pedido');
-      setNotification({ type: 'error', text: 'Error de conexión al procesar el pedido' });
+      playPosErrorTone();
+      setCheckoutError('Error de conexión al procesar el pedido. El carrito se conservó intacto.');
+      showToast('error', 'Error de conexión al procesar el pedido');
     } finally {
+      submittingOrderRef.current = false;
       setLoading(false);
     }
-  };
+  }, [
+    cart,
+    clearCart,
+    clients,
+    condicionPago,
+    currentRate,
+    effectiveCuentaBancariaId,
+    fechaVencimiento,
+    montoAbono,
+    montoRecibido,
+    onOrderCompleted,
+    permitirStockNegativo,
+    posIsEfectivo,
+    posSelectedTp,
+    posTargetMoneda,
+    rateValue,
+    referenciaPago,
+    registrarPago,
+    selectedClient,
+    selectedClientId,
+    selectedTipoPagoId,
+    showToast,
+    totalLocal,
+    totalUsd,
+  ]);
 
-  const handleCreateQuickClient = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickClientData.identificacion.trim() || !quickClientData.razon_social_nombre.trim()) {
-      setNotification({ type: 'error', text: 'Cédula/RIF y Nombre son obligatorios' });
-      return;
-    }
+  const handleQuickClientCreated = useCallback(
+    async (client: Tercero) => {
+      await loadClients();
+      setSelectedClientId(client.id);
+      showToast('success', `Cliente "${client.razon_social_nombre}" registrado y seleccionado.`);
+    },
+    [loadClients, showToast]
+  );
 
-    try {
-      const res = await fetch('/api/terceros', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tipo: 'CLIENTE',
-          identificacion: quickClientData.identificacion.trim().toUpperCase(),
-          razon_social_nombre: quickClientData.razon_social_nombre.trim(),
-          telefono: quickClientData.telefono.trim() || null,
-          email: quickClientData.email.trim() || null,
-          activo: true,
-        }),
-      });
+  const hasOpenModal =
+    showCheckoutModal ||
+    showClientSearchModal ||
+    showQuickClientModal ||
+    showShortcutsModal ||
+    showParkedModal ||
+    Boolean(lastCompletedOrder);
 
-      const data = await res.json();
-      if (data.success) {
-        await loadClients();
-        setSelectedClientId(data.tercero.id);
-        setShowQuickClientModal(false);
-        setQuickClientData({ identificacion: '', razon_social_nombre: '', telefono: '', email: '' });
-        setNotification({ type: 'success', text: 'Cliente registrado y seleccionado con éxito' });
-      } else {
-        setNotification({ type: 'error', text: data.message || 'Error al crear cliente' });
+  const handlePosKeyAction = useCallback(
+    (action: PosKeyAction) => {
+      switch (action) {
+        case 'TOGGLE_HELP':
+          setShowShortcutsModal((prev) => !prev);
+          break;
+        case 'FOCUS_SEARCH':
+          setActiveZone('catalog');
+          focusScanner();
+          break;
+        case 'FOCUS_CLIENT':
+          setShowClientSearchModal(true);
+          break;
+        case 'OPEN_QUICK_CLIENT':
+          setShowQuickClientModal(true);
+          break;
+        case 'TOGGLE_ZONE':
+          setActiveZone((prev) => {
+            const next = prev === 'catalog' ? 'cart' : 'catalog';
+            if (next === 'catalog') focusScanner();
+            return next;
+          });
+          break;
+        case 'CATALOG_PREV_PAGE':
+          setCatalogPage((p) => Math.max(1, p - 1));
+          break;
+        case 'CATALOG_NEXT_PAGE':
+          setCatalogPage((p) => Math.min(totalCatalogPages, p + 1));
+          break;
+        case 'OPEN_PARKED_ORDERS':
+          setShowParkedModal(true);
+          break;
+        case 'FOCUS_PAYMENT':
+        case 'OPEN_CHECKOUT':
+          handleOpenCheckoutModal();
+          break;
+        case 'CONFIRM_ACTIVE':
+          if (showCheckoutModal && !lastCompletedOrder) {
+            void handleProcessOrder();
+          }
+          break;
+        case 'CLEAR_CART':
+          handleRequestClearCart();
+          break;
+        case 'ESCAPE':
+          if (searchTerm) {
+            setSearchTerm('');
+            setCatalogPage(1);
+          }
+          setActiveZone('catalog');
+          focusScanner();
+          break;
+        default:
+          break;
       }
-    } catch {
-      setNotification({ type: 'error', text: 'Error de conexión al guardar cliente' });
+    },
+    [
+      focusScanner,
+      handleOpenCheckoutModal,
+      handleProcessOrder,
+      handleRequestClearCart,
+      lastCompletedOrder,
+      searchTerm,
+      showCheckoutModal,
+      totalCatalogPages,
+    ]
+  );
+
+  usePosKeyboard({
+    enabled: true,
+    hasOpenModal,
+    onAction: handlePosKeyAction,
+  });
+
+  const activePaymentLabel = useMemo(() => {
+    if (condicionPago !== 'CONTADO' && !registrarPago) {
+      return 'Sin abono inicial';
     }
-  };
+    return posSelectedTp?.nombre || 'Efectivo';
+  }, [condicionPago, posSelectedTp, registrarPago]);
 
   return (
-    <div className="space-y-4">
-      {/* Notifications */}
-      {notification && (
-        <div
-          className={`p-4 rounded-xl flex items-center justify-between text-xs font-semibold animate-in fade-in duration-200 ${notification.type === 'success'
-              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-              : 'bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400'
-            }`}
-        >
-          <div className="flex items-center gap-2">
-            {notification.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-            ) : (
-              <AlertCircle className="w-4 h-4 shrink-0" />
-            )}
-            <span>{notification.text}</span>
-          </div>
-          <button
-            onClick={() => setNotification(null)}
-            className="text-slate-400 hover:text-slate-600 text-sm leading-none ml-2"
-          >
-            &times;
-          </button>
-        </div>
-      )}
+    <div className="space-y-3">
+      {/* Barra Operativa POS */}
+      <PosTopBar
+        rateValue={rateValue}
+        onOpenRates={onOpenRates}
+        clients={clients}
+        selectedClientId={selectedClient?.id ?? selectedClientId}
+        onOpenClientSearch={() => setShowClientSearchModal(true)}
+        onOpenQuickClient={() => setShowQuickClientModal(true)}
+        permitirStockNegativo={permitirStockNegativo}
+        onToggleStockNegativo={setPermitirStockNegativo}
+        soundEnabled={soundEnabled}
+        onToggleSound={handleToggleSound}
+        onOpenShortcuts={() => setShowShortcutsModal(true)}
+        initialLoadError={initialLoadError}
+        onRetryInitialLoad={() => setReloadTick((t) => t + 1)}
+        isDarkMode={isDarkMode}
+      />
 
-      {/* Grid Layout: 7 cols Catalog | 5 cols Cart */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-        {/* Products Catalog (7 cols) */}
-        <div className="lg:col-span-7 space-y-3">
-          {/* Search bar (soporte Enter / lector código de barras o SKU exacto) */}
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Buscar producto por nombre o presiona Enter para agregar..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && searchTerm.trim()) {
-                  e.preventDefault();
-                  const term = searchTerm.trim().toLowerCase();
-                  const exactMatch = filteredProducts.find(
-                    (item) => item.nombre.trim().toLowerCase() === term || String(item.id) === term
-                  );
-                  const target = exactMatch || (filteredProducts.length === 1 ? filteredProducts[0] : null);
-                  if (target) {
-                    addToCart(target);
-                    setSearchTerm('');
-                  }
-                }
-              }}
-              className={`w-full rounded-2xl pl-10 pr-24 py-2.5 text-xs border focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-sm transition-colors ${isDarkMode
-                  ? 'bg-slate-900 border-slate-800 text-white placeholder-slate-500'
-                  : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400'
-                }`}
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-mono text-slate-400">
-              {filteredProducts.length} productos
-            </div>
-          </div>
-
-          {/* Products Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[700px] overflow-y-auto pr-1">
-            {filteredProducts.map((p) => {
-              const stockNum = Number(p.stock_actual) || 0;
-              const isOutOfStock = !permitirStockNegativo && stockNum <= 0;
-
-              // Opciones de unidad/presentación del producto
-              const opciones = getOpcionesUnidad(p);
-              const activePresId = cardSelectedPres[p.id] ?? null;
-              const activeOpcion = getOpcionUnidad(p, activePresId);
-
-              const activePriceUsd = activeOpcion.precio_usd;
-              const rawTaxPct = p.impuesto_porcentaje;
-              const taxPct = rawTaxPct !== undefined && rawTaxPct !== null ? Number(rawTaxPct) : 16.0;
-              const activeFinalUsd = Number((activePriceUsd * (1 + taxPct / 100)).toFixed(2));
-              const activePriceLocal = rateValue > 0 ? activeFinalUsd * rateValue : 0;
-
-              // Línea en carrito correspondiente a esta presentación activa
-              const activeLineId = makeLineId(p.id, activeOpcion.id);
-              const currentLineItem = cart.find((c) => c.id === activeLineId);
-              const currentQty = currentLineItem ? currentLineItem.cantidad : 0;
-
-              // Total de unidades base en carrito de este producto
-              const totalBaseInCart = getCartBaseUnits(p.id);
-
-              return (
-                <div
-                  key={p.id}
-                  className={`group relative rounded-2xl border transition-all flex flex-col justify-between overflow-hidden shadow-sm ${currentQty > 0
-                      ? isDarkMode
-                        ? 'border-indigo-500/70 bg-indigo-950/20 shadow-indigo-900/20'
-                        : 'border-indigo-500 bg-indigo-50/40 shadow-indigo-100'
-                      : isDarkMode
-                        ? 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
-                        : 'bg-white border-slate-200/90 hover:border-slate-300'
-                    }`}
-                >
-                  {/* Badge de cantidad en carrito */}
-                  {totalBaseInCart > 0 && (
-                    <div className="absolute top-2 right-2 z-20">
-                      <span
-                        title={`${totalBaseInCart} ${p.unidad_base || 'unidades'} en carrito`}
-                        className="min-w-6 h-6 px-1.5 rounded-full bg-indigo-600 text-white font-mono text-[11px] font-bold flex items-center justify-center shadow-md shadow-indigo-600/30"
-                      >
-                        {currentQty > 0 ? currentQty : `${totalBaseInCart}u`}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Contenido Visual Superior */}
-                  <div className="p-3.5 pb-2">
-                    <h4
-                      className={`font-semibold text-xs line-clamp-2 mb-1 pr-6 ${currentQty > 0
-                          ? 'text-indigo-600 dark:text-indigo-300'
-                          : isDarkMode
-                            ? 'text-white'
-                            : 'text-slate-900'
-                        }`}
-                    >
-                      {p.nombre}
-                    </h4>
-
-                    {/* Stock & Tax Indicator */}
-                    <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                      <span
-                        className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${stockNum > 10
-                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                            : stockNum > 0
-                              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                              : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
-                          }`}
-                      >
-                        {stockNum <= 0 ? 'Agotado (0)' : formatStockDesglose(p)}
-                      </span>
-                      <span
-                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${Number(p.impuesto_porcentaje) === 0
-                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold'
-                            : 'text-slate-400'
-                          }`}
-                      >
-                        {Number(p.impuesto_porcentaje) === 0 ? 'Exento (0%)' : p.impuesto_nombre || 'IVA 16%'}
-                      </span>
-                    </div>
-
-                    {/* Selector de Presentación en la tarjeta (si tiene más de 1) */}
-                    {opciones.length > 1 && (
-                      <div className="mb-2">
-                        <label className="text-[9px] uppercase tracking-wider font-bold text-slate-400 block mb-1">
-                          Presentación:
-                        </label>
-                        <div className="flex flex-wrap gap-1">
-                          {opciones.map((op) => {
-                            const isSelected = activePresId === op.id;
-                            return (
-                              <button
-                                key={op.id ?? 'base'}
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setCardSelectedPres((prev) => ({ ...prev, [p.id]: op.id }));
-                                }}
-                                className={`text-[10px] font-mono px-2 py-0.5 rounded-lg border transition ${isSelected
-                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm font-bold'
-                                    : isDarkMode
-                                      ? 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-                                      : 'bg-slate-100 border-slate-200 text-slate-600 hover:text-slate-900'
-                                  }`}
-                              >
-                                {op.nombre}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Precio Activo de la Presentación (PVP Final con IVA incluido) */}
-                    <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800/60">
-                      <div className="text-base font-bold text-emerald-600 dark:text-emerald-400 font-mono">
-                        ${activeFinalUsd.toFixed(2)}{' '}
-                        <span className="text-[10px] font-normal text-slate-400">
-                          / {activeOpcion.nombre}
-                        </span>
-                      </div>
-                      {taxPct > 0 && (
-                        <div className="text-[10px] font-mono text-slate-400">
-                          Base ${activePriceUsd.toFixed(2)} + {taxPct}% IVA
-                        </div>
-                      )}
-                      {rateValue > 0 && (
-                        <div className={`text-[10px] font-mono ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                          ≈ {activePriceLocal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Botones de Restar, Input de Cantidad y Sumar */}
-                  <div
-                    className={`p-2 pt-1.5 border-t flex items-center gap-1.5 transition-colors ${isDarkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-white border-slate-100'
-                      }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (currentQty > 0) updateQuantity(activeLineId, -1);
-                      }}
-                      disabled={currentQty === 0}
-                      title="Restar 1 unidad"
-                      className={`p-1.5 rounded-xl text-xs font-semibold flex items-center justify-center transition-all ${currentQty > 0
-                          ? isDarkMode
-                            ? 'bg-rose-950/50 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 active:scale-95 cursor-pointer'
-                            : 'bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 active:scale-95 cursor-pointer shadow-sm'
-                          : isDarkMode
-                            ? 'bg-slate-900/40 text-slate-600 border border-slate-800/60 cursor-not-allowed opacity-40'
-                            : 'bg-slate-100 text-slate-300 border border-slate-200/80 cursor-not-allowed opacity-50'
-                        }`}
-                    >
-                      <Minus className="w-3.5 h-3.5 stroke-[2.5]" />
-                    </button>
-
-                    <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="number"
-                        min="0"
-                        value={currentQty > 0 ? currentQty : ''}
-                        placeholder="0"
-                        onChange={(e) => {
-                          const val = e.target.value === '' ? 0 : parseInt(e.target.value, 10);
-                          if (!isNaN(val)) {
-                            setProductLineQuantity(p, activePresId, val);
-                          }
-                        }}
-                        className={`w-full text-center text-xs font-bold font-mono py-1 rounded-xl border focus:ring-2 focus:ring-indigo-500/50 outline-none transition ${currentQty > 0
-                            ? isDarkMode
-                              ? 'bg-indigo-950/50 border-indigo-500/50 text-indigo-300 font-black'
-                              : 'bg-indigo-50 border-indigo-300 text-indigo-700 font-black'
-                            : isDarkMode
-                              ? 'bg-slate-800/80 border-slate-700 text-slate-300 placeholder-slate-500'
-                              : 'bg-slate-50 border-slate-200 text-slate-700 placeholder-slate-400'
-                          }`}
-                        title={`Escribe la cantidad de ${activeOpcion.nombre}`}
-                      />
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={isOutOfStock}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        addToCart(p, activePresId);
-                      }}
-                      title={`Sumar 1 ${activeOpcion.nombre}`}
-                      className={`p-1.5 rounded-xl text-xs font-semibold flex items-center justify-center transition-all shadow-sm active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${isDarkMode
-                          ? 'bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/60'
-                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
-                        }`}
-                    >
-                      <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+      {/* Workspace Lado a Lado desde md (768px+): Catálogo 7 cols | Ticket 5 cols */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-stretch md:h-[calc(100dvh-11.5rem)] md:min-h-[500px]">
+        <div className="md:col-span-7 min-h-0 flex flex-col">
+          <PosCatalogPanel
+            products={products}
+            cart={cart}
+            rateValue={rateValue}
+            permitirStockNegativo={permitirStockNegativo}
+            searchTerm={searchTerm}
+            onSearchTermChange={setSearchTerm}
+            searchInputRef={searchInputRef}
+            cardSelectedPres={cardSelectedPres}
+            onSelectCardPres={handleSelectCardPres}
+            getCartBaseUnits={getCartBaseUnits}
+            makeLineId={makeLineId}
+            onAddToCart={addToCart}
+            page={catalogPage}
+            onPageChange={setCatalogPage}
+            isActiveZone={activeZone === 'catalog'}
+            onFocusZone={() => setActiveZone('catalog')}
+            isDarkMode={isDarkMode}
+          />
         </div>
 
-        {/* Current Order / Cart Panel (5 cols) */}
-        <div className="lg:col-span-5 space-y-4">
-          <div
-            className={`rounded-2xl border shadow-xl flex flex-col h-[700px] transition-colors ${isDarkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-white border-slate-200 shadow-md'
-              }`}
-          >
-            {/* Cart Header */}
-            <div
-              className={`p-4 border-b flex items-center justify-between ${isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-lg border border-indigo-500/20">
-                  <ShoppingCart className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className={`font-bold text-sm ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                    Pedido de Venta
-                  </h3>
-                  <p className={`text-[11px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {cart.length} líneas en carrito
-                  </p>
-                </div>
-              </div>
-              {cart.length > 0 && (
-                <button
-                  onClick={clearCart}
-                  className="text-xs text-rose-500 hover:text-rose-600 transition font-medium"
-                >
-                  Vaciar
-                </button>
-              )}
-            </div>
-
-            {/* Client Selector & Stock Negativo Toggle */}
-            <div
-              className={`p-4 border-b space-y-2 ${isDarkMode ? 'bg-slate-950/20 border-slate-800' : 'bg-white border-slate-100'
-                }`}
-            >
-              <div className="flex items-center justify-between">
-                <label
-                  className={`text-[11px] font-semibold uppercase tracking-wider flex items-center gap-1.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'
-                    }`}
-                >
-                  <User className="w-3.5 h-3.5 text-indigo-500" /> Cliente / Tercero *
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowQuickClientModal(true)}
-                  className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline flex items-center gap-1"
-                >
-                  <UserPlus className="w-3 h-3" /> + Cliente Rápido
-                </button>
-              </div>
-
-              <select
-                value={selectedClientId}
-                onChange={(e) => setSelectedClientId(Number(e.target.value))}
-                className={`w-full rounded-xl px-3 py-2 text-xs border font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${isDarkMode
-                    ? 'bg-slate-800/80 border-slate-700/80 text-white'
-                    : 'bg-slate-50 border-slate-200 text-slate-900'
-                  }`}
-              >
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.identificacion} - {c.razon_social_nombre} {c.id === 1 ? '(Por defecto)' : ''}
-                  </option>
-                ))}
-              </select>
-
-              {/* Negative Stock Toggle */}
-              <div className="flex items-center justify-between pt-1">
-                <label htmlFor="negStockToggle" className="text-[11px] text-slate-400 cursor-pointer flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    id="negStockToggle"
-                    checked={permitirStockNegativo}
-                    onChange={(e) => setPermitirStockNegativo(e.target.checked)}
-                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 text-xs"
-                  />
-                  <span>Permitir venta sin stock (stock negativo)</span>
-                </label>
-              </div>
-            </div>
-
-            {/* Cart Items List */}
-            <div
-              className={`flex-1 overflow-y-auto p-4 space-y-2.5 divide-y ${isDarkMode ? 'divide-slate-800/40' : 'divide-slate-100'
-                }`}
-            >
-              {cart.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center py-16">
-                  <ShoppingCart className="w-12 h-12 mb-2 opacity-25" />
-                  <p className="text-sm font-medium">El carrito está vacío</p>
-                  <p className="text-xs text-slate-400 mt-1">Haz clic en los productos para agregarlos</p>
-                </div>
-              ) : (
-                cart.map((item) => {
-                  const subtotal = item.precio_unitario_usd * item.cantidad;
-                  const rawTax = item.producto.impuesto_porcentaje;
-                  const taxPct = rawTax !== undefined && rawTax !== null ? Number(rawTax) : 16.0;
-                  const opciones = getOpcionesUnidad(item.producto);
-
-                  return (
-                    <div
-                      key={item.id}
-                      className="pt-2.5 first:pt-0 flex items-center justify-between gap-2.5"
-                    >
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div
-                          className={`font-semibold text-xs truncate ${isDarkMode ? 'text-white' : 'text-slate-900'
-                            }`}
-                        >
-                          {item.producto.nombre}
-                        </div>
-
-                        {/* Selector de Presentación en la línea del carrito */}
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {opciones.length > 1 ? (
-                            <select
-                              value={item.presentacion_id ?? ''}
-                              onChange={(e) => {
-                                const val = e.target.value === '' ? null : Number(e.target.value);
-                                changeItemPresentation(item.id, val);
-                              }}
-                              className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded-lg border focus:outline-none focus:ring-1 focus:ring-indigo-500 ${isDarkMode
-                                  ? 'bg-slate-800 border-slate-700 text-indigo-300'
-                                  : 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                                }`}
-                            >
-                              {opciones.map((op) => (
-                                <option key={op.id ?? 'base'} value={op.id ?? ''}>
-                                  {op.nombre} ({op.factor} {item.producto.unidad_base || 'un.'}) - ${op.precio_usd.toFixed(2)}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span className="text-[10px] font-mono font-bold text-slate-400">
-                              {item.presentacion_nombre}
-                            </span>
-                          )}
-
-                          <span
-                            className={`text-[10px] font-semibold ${taxPct === 0
-                                ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1 rounded'
-                                : 'text-amber-500'
-                              }`}
-                          >
-                            {taxPct === 0 ? '(Exento 0%)' : `(IVA: ${taxPct}%)`}
-                          </span>
-                        </div>
-
-                        <div className={`text-[11px] font-mono ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                          ${item.precio_unitario_usd.toFixed(2)} c/u
-                        </div>
-                      </div>
-
-                      {/* Quantity Controller */}
-                      <div className="flex items-center gap-2 shrink-0">
-                        <div
-                          className={`flex items-center rounded-lg border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'
-                            }`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => updateQuantity(item.id, -1)}
-                            className="p-1 hover:text-indigo-600 text-slate-400 transition"
-                            title="Restar 1"
-                          >
-                            <Minus className="w-3 h-3" />
-                          </button>
-                          <input
-                            type="number"
-                            min="1"
-                            value={item.cantidad}
-                            onChange={(e) => {
-                              const val = e.target.value === '' ? 1 : parseInt(e.target.value, 10);
-                              if (!isNaN(val)) {
-                                setDirectQuantity(item.id, val);
-                              }
-                            }}
-                            className={`w-12 text-center text-xs font-bold font-mono bg-transparent border-0 focus:ring-1 focus:ring-indigo-500 rounded py-0.5 px-0.5 outline-none ${isDarkMode ? 'text-white' : 'text-slate-900'
-                              }`}
-                            title="Escribe la cantidad directamente"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => updateQuantity(item.id, 1)}
-                            className="p-1 hover:text-indigo-600 text-slate-400 transition"
-                            title="Sumar 1"
-                          >
-                            <Plus className="w-3 h-3" />
-                          </button>
-                        </div>
-
-                        <div className="text-right w-16">
-                          <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 font-mono">
-                            ${subtotal.toFixed(2)}
-                          </span>
-                        </div>
-
-                        <button
-                          onClick={() => removeFromCart(item.id)}
-                          className="text-slate-400 hover:text-rose-500 p-1 transition"
-                          title="Eliminar de carrito"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Order Totals & Action with Tax Breakdown */}
-            <div
-              className={`p-4 border-t space-y-2.5 ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                }`}
-            >
-              <div className={`space-y-1 text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                {baseExentaUsd > 0 && (
-                  <div className="flex justify-between text-emerald-600 dark:text-emerald-400 font-medium">
-                    <span>Base Exenta (0%):</span>
-                    <span className="font-mono font-semibold">${baseExentaUsd.toFixed(2)}</span>
-                  </div>
-                )}
-                {baseGravadaUsd > 0 && (
-                  <div className="flex justify-between">
-                    <span>{baseExentaUsd > 0 ? 'Base Gravable:' : 'Base Imponible:'}</span>
-                    <span className={`font-mono font-semibold ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
-                      ${baseGravadaUsd.toFixed(2)}
-                    </span>
-                  </div>
-                )}
-                {baseExentaUsd === 0 && baseGravadaUsd === 0 && (
-                  <div className="flex justify-between">
-                    <span>Base Imponible:</span>
-                    <span className={`font-mono font-semibold ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
-                      ${baseImponibleUsd.toFixed(2)}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between text-amber-600 dark:text-amber-400">
-                  <span>Impuesto (IVA):</span>
-                  <span className="font-mono font-semibold">+${montoImpuestoUsd.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-baseline pt-1 border-t border-slate-200 dark:border-slate-800">
-                  <span className={`text-sm font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                    Total USD:
-                  </span>
-                  <span className="text-xl font-black font-mono text-emerald-600 dark:text-emerald-400">
-                    ${totalUsd.toFixed(2)}
-                  </span>
-                </div>
-                <div
-                  className={`flex justify-between items-baseline border-t pt-1 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'
-                    }`}
-                >
-                  <span
-                    className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-300' : 'text-indigo-600'
-                      }`}
-                  >
-                    Total Moneda Local:
-                  </span>
-                  <span className="text-xl font-black font-mono text-indigo-600 dark:text-indigo-400">
-                    {totalLocal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
-                    <span className="text-xs font-normal">Bs.</span>
-                  </span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleOpenCheckoutModal}
-                disabled={cart.length === 0 || loading || rateValue <= 0}
-                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl shadow-md shadow-emerald-600/20 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                <Receipt className="w-4 h-4" /> Cobrar y Descontar Inventario
-              </button>
-            </div>
-          </div>
+        <div className="md:col-span-5 min-h-0 flex flex-col">
+          <PosCartPanel
+            cart={cart}
+            totals={totals}
+            rateValue={rateValue}
+            condicionPago={condicionPago}
+            activePaymentLabel={activePaymentLabel}
+            parkedCount={parkedSales.length}
+            isActiveZone={activeZone === 'cart'}
+            onFocusZone={() => setActiveZone('cart')}
+            onUpdateQuantity={updateQuantity}
+            onSetDirectQuantity={setDirectQuantity}
+            onChangePresentation={changeItemPresentation}
+            onRemoveItem={removeFromCart}
+            onRequestClearCart={handleRequestClearCart}
+            onOpenParkedOrders={() => setShowParkedModal(true)}
+            onParkCurrentSale={handleParkCurrentSale}
+            onOpenCheckout={handleOpenCheckoutModal}
+            isDarkMode={isDarkMode}
+          />
         </div>
       </div>
 
-      {/* Quick Client Modal */}
-      <Dialog
+      {/* Diálogo de Búsqueda de Clientes [F3 / Alt+C] */}
+      <PosClientSearchModal
+        open={showClientSearchModal}
+        onClose={() => setShowClientSearchModal(false)}
+        onAfterClose={focusScanner}
+        clients={clients}
+        selectedClientId={selectedClient?.id ?? selectedClientId}
+        onSelectClient={(client) => {
+          setSelectedClientId(client.id);
+          showToast('info', `Cliente seleccionado: ${client.razon_social_nombre}`);
+        }}
+        onOpenQuickClient={() => setShowQuickClientModal(true)}
+        isDarkMode={isDarkMode}
+      />
+
+      {/* Quick Client Modal [Alt+N] */}
+      <PosQuickClientModal
         open={showQuickClientModal}
         onClose={() => setShowQuickClientModal(false)}
-        titleId="quick-client-modal-title"
-        maxWidthClass="max-w-md"
+        onAfterClose={focusScanner}
+        onClientCreated={handleQuickClientCreated}
         isDarkMode={isDarkMode}
-      >
-        <div className="p-6">
-          <h3 id="quick-client-modal-title" className="text-base font-bold mb-3 flex items-center gap-2">
-            <UserPlus className="w-4 h-4 text-indigo-500" />
-            Nuevo Cliente Rápido
-          </h3>
-          <form onSubmit={handleCreateQuickClient} className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold mb-1">Cédula / RIF *</label>
-              <input
-                type="text"
-                required
-                placeholder="Ej: V-12345678"
-                value={quickClientData.identificacion}
-                onChange={(e) => setQuickClientData({ ...quickClientData, identificacion: e.target.value })}
-                className={`w-full px-3 py-2 rounded-xl border text-sm uppercase ${
-                  isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
-                }`}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold mb-1">Nombre o Razón Social *</label>
-              <input
-                type="text"
-                required
-                placeholder="Ej: María Rodríguez"
-                value={quickClientData.razon_social_nombre}
-                onChange={(e) =>
-                  setQuickClientData({ ...quickClientData, razon_social_nombre: e.target.value })
-                }
-                className={`w-full px-3 py-2 rounded-xl border text-sm ${
-                  isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
-                }`}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold mb-1">Teléfono</label>
-              <input
-                type="text"
-                placeholder="Ej: 0412-1234567"
-                value={quickClientData.telefono}
-                onChange={(e) => setQuickClientData({ ...quickClientData, telefono: e.target.value })}
-                className={`w-full px-3 py-2 rounded-xl border text-sm ${
-                  isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'
-                }`}
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowQuickClientModal(false)}
-                className="px-3 py-1.5 text-xs rounded-lg border"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-500"
-              >
-                Guardar y Seleccionar
-              </button>
-            </div>
-          </form>
-        </div>
-      </Dialog>
+      />
 
-      {/* Modal de Cobro: Confirmación previa (evita errores de dedo) y Recibo final */}
-      <Dialog
-        open={Boolean(showCheckoutModal || lastCompletedOrder)}
+      {/* Keyboard Shortcuts Modal [F1 / Alt+H] */}
+      <PosShortcutsModal
+        open={showShortcutsModal}
+        onClose={() => setShowShortcutsModal(false)}
+        onAfterClose={focusScanner}
+        isDarkMode={isDarkMode}
+      />
+
+      {/* Ventas en Espera Modal [F9] */}
+      <PosParkedOrdersModal
+        open={showParkedModal}
+        onClose={() => setShowParkedModal(false)}
+        onAfterClose={focusScanner}
+        parkedSales={parkedSales}
+        onRecallSale={handleRecallParkedSale}
+        onDeleteSale={handleDeleteParkedSale}
+        isDarkMode={isDarkMode}
+      />
+
+      {/* Modal de Cobro Split Layout 2 Columnas [F8] */}
+      <PosCheckoutModal
+        open={showCheckoutModal}
         onClose={() => {
-          if (!loading) {
-            setShowCheckoutModal(false);
-            setLastCompletedOrder(null);
-            setCheckoutError(null);
-          }
+          setShowCheckoutModal(false);
+          setCheckoutError(null);
         }}
-        closeOnBackdrop={!loading}
-        ariaLabel={lastCompletedOrder ? 'Comprobante de venta' : 'Confirmar venta y cobro'}
-        maxWidthClass="max-w-lg"
+        onAfterClose={focusScanner}
+        cart={cart}
+        totals={totals}
+        rateValue={rateValue}
+        selectedClient={selectedClient}
+        condicionPago={condicionPago}
+        onSelectCondicionPago={handleSelectCondicionPago}
+        fechaVencimiento={fechaVencimiento}
+        onFechaVencimientoChange={setFechaVencimiento}
+        registrarPago={registrarPago}
+        onRegistrarPagoChange={(next) => {
+          setRegistrarPago(next);
+          setCheckoutError(null);
+        }}
+        tiposPago={tiposPago}
+        selectedTipoPagoId={selectedTipoPagoId}
+        onSelectTipoPago={handleSelectTipoPago}
+        cuentasCompatibles={posCuentasCompatibles}
+        effectiveCuentaBancariaId={effectiveCuentaBancariaId}
+        onSelectCuentaBancaria={setSelectedCuentaBancariaId}
+        referenciaPago={referenciaPago}
+        onReferenciaPagoChange={setReferenciaPago}
+        montoAbono={montoAbono}
+        onMontoAbonoChange={setMontoAbono}
+        montoRecibido={montoRecibido}
+        onMontoRecibidoChange={setMontoRecibido}
+        checkoutError={checkoutError}
+        loading={loading}
+        onConfirmOrder={() => void handleProcessOrder()}
         isDarkMode={isDarkMode}
-      >
-        <div className="p-5 sm:p-6 space-y-4">
-            {lastCompletedOrder ? (
-              /* FASE 2: Recibo de Venta Exitosa (Pedido registrado e inventario descontado) */
-              <>
-                <div className="text-center space-y-1">
-                  <div className="w-12 h-12 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-2 border border-emerald-500/20">
-                    <CheckCircle2 className="w-7 h-7" />
-                  </div>
-                  <h3 className={`text-lg font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                    ¡Venta Exitosa!
-                  </h3>
-                  <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {storeName} · Comprobante de Pedido #{lastCompletedOrder.id}
-                  </p>
-                  <div className="mt-2 flex justify-center">
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                      <CheckCircle2 className="w-3 h-3" /> Estado: Completo
-                    </span>
-                  </div>
-                </div>
+      />
 
-                <div
-                  className={`p-3.5 rounded-xl border space-y-2 text-xs ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                    }`}
-                >
-                  <div className="flex justify-between text-slate-500">
-                    <span>Cliente:</span>
-                    <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                      {lastCompletedOrder.cliente_nombre || 'Cliente General'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>RIF / Cédula:</span>
-                    <span className="font-mono text-slate-400">
-                      {lastCompletedOrder.cliente_identificacion || 'V-00000000'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Tasa aplicada:</span>
-                    <span className={`font-mono ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                      {Number(lastCompletedOrder.tasa_cambio_aplicada).toFixed(4)}
-                    </span>
-                  </div>
-                  <div
-                    className={`border-t pt-2 space-y-1 max-h-40 overflow-y-auto pr-1 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'
-                      }`}
-                  >
-                    {lastCompletedOrder.lineas?.map((l) => (
-                      <div key={l.lineId} className="flex justify-between text-[11px]">
-                        <span className={isDarkMode ? 'text-slate-300' : 'text-slate-700'}>
-                          {l.cantidad}x {l.nombre}
-                        </span>
-                        <span className="font-mono">${Number(l.subtotal).toFixed(2)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div
-                    className={`border-t pt-2 space-y-1 text-slate-500 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'
-                      }`}
-                  >
-                    <div className="flex justify-between text-[11px]">
-                      <span>Base Imponible:</span>
-                      <span className="font-mono">${Number(lastCompletedOrder.base_imponible_usd || 0).toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-[11px] text-amber-500">
-                      <span>Impuesto (IVA):</span>
-                      <span className="font-mono">+${Number(lastCompletedOrder.monto_impuesto_usd || 0).toFixed(2)}</span>
-                    </div>
-                  </div>
-                  <div
-                    className={`border-t pt-2 flex justify-between font-bold ${isDarkMode ? 'border-slate-800 text-white' : 'border-slate-200 text-slate-900'
-                      }`}
-                  >
-                    <span>Total USD:</span>
-                    <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                      ${Number(lastCompletedOrder.total_usd).toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between font-bold text-indigo-600 dark:text-indigo-400">
-                    <span>Total Local:</span>
-                    <span className="font-mono">
-                      {Number(lastCompletedOrder.total_moneda_local).toLocaleString('es-VE', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}{' '}
-                      Bs.
-                    </span>
-                  </div>
-
-                  {/* Detalle de Pago */}
-                  <div className={`border-t pt-2 space-y-1 text-[11px] ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Término de Venta:</span>
-                      <span className={`font-bold ${lastCompletedOrder.condicion_pago !== 'CONTADO' ? 'text-amber-500' : 'text-emerald-500'}`}>
-                        {lastCompletedOrder.condicion_pago || 'CONTADO'}
-                      </span>
-                    </div>
-                    {lastCompletedOrder.tipo_pago_nombre && (
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Forma de Cobro:</span>
-                        <span className="font-medium">{lastCompletedOrder.tipo_pago_nombre}</span>
-                      </div>
-                    )}
-                    {lastCompletedOrder.referencia_pago && (
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Referencia:</span>
-                        <span className="font-mono">{lastCompletedOrder.referencia_pago}</span>
-                      </div>
-                    )}
-                    {lastCompletedOrder.condicion_pago !== 'CONTADO' && lastCompletedOrder.fecha_vencimiento && (
-                      <div className="flex justify-between text-amber-500">
-                        <span>Fecha Vencimiento:</span>
-                        <span className="font-mono font-semibold">{lastCompletedOrder.fecha_vencimiento}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => window.print()}
-                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <Receipt className="w-4 h-4" />
-                    Imprimir Ticket
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLastCompletedOrder(null);
-                      setShowCheckoutModal(false);
-                      setCheckoutError(null);
-                    }}
-                    className="flex-1 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
-                  >
-                    Cerrar Comprobante
-                  </button>
-                </div>
-              </>
-            ) : (
-              /* FASE 1: Confirmación de Cobro (Evita errores de dedo) */
-              <>
-                <div className="relative text-center space-y-1">
-                  {!loading && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowCheckoutModal(false);
-                        setCheckoutError(null);
-                      }}
-                      className="absolute -top-1 -right-1 text-slate-400 hover:text-slate-600 dark:hover:text-white p-1 rounded-lg text-sm leading-none"
-                      title="Cancelar"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                  <div className="w-12 h-12 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-2 border border-emerald-500/20">
-                    <Receipt className="w-6 h-6" />
-                  </div>
-                  <h3 className={`text-lg font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                    Confirmar Venta y Cobro
-                  </h3>
-                  <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                    Verifica los detalles antes de procesar el pago y descontar el inventario
-                  </p>
-                  <div className="mt-2 flex justify-center">
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                      <AlertCircle className="w-3 h-3" /> Confirmación Requerida
-                    </span>
-                  </div>
-                </div>
-
-                <div
-                  className={`p-3.5 rounded-xl border space-y-2 text-xs ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
-                    }`}
-                >
-                  <div className="flex justify-between text-slate-500">
-                    <span>Cliente:</span>
-                    <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                      {selectedClient?.razon_social_nombre || 'Cliente Genérico / Venta Mostrador'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>RIF / Cédula:</span>
-                    <span className="font-mono text-slate-400">
-                      {selectedClient?.identificacion || 'V-00000000'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Tasa aplicada:</span>
-                    <span className={`font-mono ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                      {rateValue.toFixed(4)}
-                    </span>
-                  </div>
-
-                  {/* Detalle de productos en carrito */}
-                  <div
-                    className={`border-t pt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'
-                      }`}
-                  >
-                    {cart.map((c) => (
-                      <div key={c.id} className="flex justify-between items-center text-[11px]">
-                        <span className={`truncate max-w-[190px] ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                          {c.cantidad}x {c.presentacion_id ? `${c.producto.nombre} (${c.presentacion_nombre})` : c.producto.nombre}
-                        </span>
-                        <span className="font-mono shrink-0">${(c.precio_unitario_usd * c.cantidad).toFixed(2)}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div
-                    className={`border-t pt-2 space-y-1 text-slate-500 ${isDarkMode ? 'border-slate-800' : 'border-slate-200'
-                      }`}
-                  >
-                    <div className="flex justify-between text-[11px]">
-                      <span>Base Imponible:</span>
-                      <span className="font-mono">${baseImponibleUsd.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-[11px] text-amber-500">
-                      <span>Impuesto (IVA):</span>
-                      <span className="font-mono">+${montoImpuestoUsd.toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`border-t pt-2 flex justify-between font-bold ${isDarkMode ? 'border-slate-800 text-white' : 'border-slate-200 text-slate-900'
-                      }`}
-                  >
-                    <span>Total USD:</span>
-                    <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                      ${totalUsd.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between font-bold text-indigo-600 dark:text-indigo-400">
-                    <span>Total Local:</span>
-                    <span className="font-mono">
-                      {totalLocal.toLocaleString('es-VE', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}{' '}
-                      Bs.
-                    </span>
-                  </div>
-                </div>
-
-                {/* Selección de Término y Tipo de Pago */}
-                <div className={`p-3.5 rounded-xl border space-y-3 ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                      Término de Venta
-                    </label>
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                      {[
-                        { id: 'CONTADO', label: 'Contado' },
-                        { id: 'CREDITO_7', label: '7 Días' },
-                        { id: 'CREDITO_15', label: '15 Días' },
-                        { id: 'CREDITO_30', label: '30 Días' },
-                        { id: 'CREDITO_45', label: '45 Días' },
-                        { id: 'CREDITO', label: 'Crédito' },
-                      ].map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => handleSelectCondicionPago(item.id as CondicionPago)}
-                          className={`py-1.5 px-2 rounded-xl text-[11px] font-bold transition flex items-center justify-center border cursor-pointer ${
-                            condicionPago === item.id
-                              ? item.id === 'CONTADO'
-                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
-                                : 'bg-amber-600 text-white border-amber-500 shadow-sm'
-                              : isDarkMode
-                              ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                              : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {condicionPago !== 'CONTADO' && (
-                    <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-amber-500 flex items-center gap-1">
-                          <AlertCircle className="w-3.5 h-3.5" /> Venta a Crédito
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                          <label className="text-[11px] text-slate-400">Vencimiento:</label>
-                          <input
-                            type="date"
-                            value={fechaVencimiento}
-                            onChange={(e) => setFechaVencimiento(e.target.value)}
-                            className={`px-2 py-0.5 rounded-lg border text-xs font-mono font-bold text-amber-500 focus:outline-none ${
-                              isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-300'
-                            }`}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Opción de Registrar Pago Inicial/Abono */}
-                      <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-amber-500/20 text-xs text-slate-600 dark:text-slate-300">
-                        <input
-                          type="checkbox"
-                          checked={registrarPago}
-                          onChange={(e) => setRegistrarPago(e.target.checked)}
-                          className="rounded text-amber-600 focus:ring-amber-500 w-3.5 h-3.5 cursor-pointer"
-                        />
-                        <span className="font-medium">¿Registrar pago o abono inicial para esta venta? (Opcional)</span>
-                      </label>
-                    </div>
-                  )}
-
-                  {/* Campos de Pago (obligatorios en contado, opcionales en crédito) */}
-                  {registrarPago && (
-                    <div className="space-y-2.5 pt-1">
-                      {/* En caso de venta a crédito o abono, permitir especificar el monto del abono */}
-                      {condicionPago !== 'CONTADO' && (
-                        <div className="p-2.5 rounded-xl border border-indigo-500/30 bg-indigo-500/5 space-y-1">
-                          <div className="flex items-center justify-between">
-                            <label className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">
-                              Monto del Abono Inicial ({tiposPago.find((t) => t.id === selectedTipoPagoId)?.moneda || 'USD'})
-                            </label>
-                            <span className="text-[10px] text-slate-400">
-                              Total Venta: {tiposPago.find((t) => t.id === selectedTipoPagoId)?.moneda === 'VES' ? `${totalLocal.toFixed(2)} Bs.` : `$${totalUsd.toFixed(2)}`}
-                            </span>
-                          </div>
-                          <PosNumberInput
-                            value={montoAbono}
-                            onChange={(val) => setMontoAbono(String(val))}
-                            decimals={2}
-                            placeholder="0,00"
-                            className={`w-full px-3 py-1.5 rounded-xl border font-mono font-bold text-sm ${
-                              isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
-                            }`}
-                          />
-                          <p className="text-[10px] text-slate-400">
-                            Si se deja en 0,00 se asumirá el pago completo de la venta.
-                          </p>
-                        </div>
-                      )}
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                            Método / Tipo de Pago
-                          </label>
-                          <select
-                            value={selectedTipoPagoId ?? ''}
-                            onChange={(e) => {
-                              const id = e.target.value ? Number(e.target.value) : null;
-                              setSelectedTipoPagoId(id);
-                              if (id) {
-                                const tp = tiposPago.find((t) => t.id === id);
-                                if (tp) {
-                                  const isEf = tp.codigo?.startsWith('EFECTIVO');
-                                  const comp = cuentasBancarias.find(
-                                    (cb) => (isEf ? cb.banco_tipo === 'CAJA' : cb.banco_tipo === 'BANCO') && cb.moneda === tp.moneda
-                                  );
-                                  setSelectedCuentaBancariaId(comp ? comp.id : null);
-                                }
-                              }
-                            }}
-                            className={`w-full px-3 py-2 rounded-xl border text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/50 cursor-pointer ${
-                              isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
-                            }`}
-                          >
-                            {tiposPago.map((tp) => (
-                              <option key={tp.id} value={tp.id}>
-                                {tp.nombre} ({tp.moneda})
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                            {posIsEfectivo ? 'Caja de Efectivo Destino' : 'Cuenta Bancaria Destino'}
-                          </label>
-                          <select
-                            value={selectedCuentaBancariaId ?? ''}
-                            onChange={(e) => setSelectedCuentaBancariaId(e.target.value ? Number(e.target.value) : null)}
-                            className={`w-full px-3 py-2 rounded-xl border text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/50 cursor-pointer ${
-                              isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
-                            }`}
-                          >
-                            {posCuentasCompatibles.length === 0 ? (
-                              <option value="">
-                                -- Sin {posIsEfectivo ? 'caja' : 'cuenta'} en {posTargetMoneda} --
-                              </option>
-                            ) : (
-                              posCuentasCompatibles.map((cb) => (
-                                <option key={cb.id} value={cb.id}>
-                                  [{cb.banco_tipo}] {cb.nombre} ({cb.moneda})
-                                </option>
-                              ))
-                            )}
-                          </select>
-                        </div>
-                      </div>
-
-                      {(() => {
-                        const currentTp = tiposPago.find((t) => t.id === selectedTipoPagoId);
-                        const payMoneda = currentTp?.moneda || 'USD';
-                        const abonoNum = parseFloat(montoAbono);
-                        const expectedToPay =
-                          condicionPago !== 'CONTADO' && Number.isFinite(abonoNum) && abonoNum > 0
-                            ? abonoNum
-                            : payMoneda === 'VES'
-                            ? totalLocal
-                            : totalUsd;
-                        const receivedNum = parseFloat(montoRecibido);
-                        const vuelto =
-                          Number.isFinite(receivedNum) && receivedNum >= expectedToPay
-                            ? receivedNum - expectedToPay
-                            : null;
-
-                        return (
-                          <>
-                            {!currentTp?.requiere_referencia && (
-                              <div className="p-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 space-y-1.5">
-                                <div className="flex items-center justify-between text-[11px]">
-                                  <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                                    Efectivo Recibido / Vuelto ({payMoneda})
-                                  </span>
-                                  <span className="font-mono text-slate-400">
-                                    Por cobrar: {payMoneda === 'VES' ? `${expectedToPay.toFixed(2)} Bs.` : `$${expectedToPay.toFixed(2)}`}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    placeholder={`Monto recibido (${payMoneda})`}
-                                    value={montoRecibido}
-                                    onChange={(e) => setMontoRecibido(e.target.value)}
-                                    className={`flex-1 px-3 py-1.5 rounded-xl border text-xs font-mono font-bold ${
-                                      isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
-                                    }`}
-                                  />
-                                  {vuelto !== null && (
-                                    <div className="px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-xs font-mono font-black text-emerald-600 dark:text-emerald-400">
-                                      Vuelto: {payMoneda === 'VES' ? `${vuelto.toFixed(2)} Bs.` : `$${vuelto.toFixed(2)}`}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-
-                            {(currentTp?.requiere_referencia || referenciaPago) && (
-                              <div className="space-y-1">
-                                <label className="block text-[11px] font-semibold text-slate-500">
-                                  Número / Referencia de Pago {currentTp?.requiere_referencia && <span className="text-rose-500">*</span>}
-                                </label>
-                                <input
-                                  type="text"
-                                  placeholder="Ej: Últimos 4 dígitos o ref bancaria / ID Cashea"
-                                  value={referenciaPago}
-                                  onChange={(e) => setReferenciaPago(e.target.value)}
-                                  className={`w-full px-3 py-1.5 rounded-xl border text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
-                                    isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
-                                  }`}
-                                />
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </div>
-
-                {checkoutError && (
-                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>{checkoutError}</span>
-                  </div>
-                )}
-
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCheckoutModal(false);
-                      setCheckoutError(null);
-                    }}
-                    disabled={loading}
-                    className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-semibold transition cursor-pointer ${isDarkMode
-                        ? 'border-slate-700 hover:bg-slate-800 text-slate-300'
-                        : 'border-slate-300 hover:bg-slate-100 text-slate-700'
-                      } disabled:opacity-50`}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleProcessOrder}
-                    disabled={loading}
-                    className="flex-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition shadow-md shadow-emerald-600/20 flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
-                  >
-                    {loading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" /> Procesando...
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" /> Cobrar y Descontar
-                      </>
-                    )}
-                  </button>
-                </div>
-              </>
-            )}
-        </div>
-      </Dialog>
+      {/* Modal de Recibo + Ticket Térmico 80mm */}
+      <PosReceiptModal
+        order={lastCompletedOrder}
+        storeName={storeName}
+        onClose={() => setLastCompletedOrder(null)}
+        onAfterClose={focusScanner}
+        isDarkMode={isDarkMode}
+      />
     </div>
   );
 }

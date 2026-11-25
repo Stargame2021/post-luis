@@ -165,15 +165,30 @@ export function useAppSession(params: { onResetNavigation: () => void }) {
         hasTabPermission(currentUser, 'price_list') ||
         hasTabPermission(currentUser, 'compras');
 
-      if (canFetchProducts) {
-        const prodOutcome = await requestJson('/api/productos');
-        if (prodOutcome.status === 'unauthorized') {
-          resetClientSession();
-          return;
-        }
-        if (prodOutcome.status === 'forbidden') {
-          setProducts([]);
-        } else if (prodOutcome.status === 'server_error' || prodOutcome.status === 'error') {
+      // Ejecutar las cargas en paralelo (Promise.all) para minimizar latencia post-venta (P1-7)
+      const [prodOutcome, rateOutcome, historyOutcome, dashOutcome, empresaOutcome] =
+        await Promise.all([
+          canFetchProducts ? requestJson('/api/productos') : Promise.resolve(null),
+          requestJson('/api/tasa'),
+          requestJson('/api/tasa?all=true'),
+          requestJson('/api/dashboard'),
+          requestJson('/api/empresa'),
+        ]);
+
+      if (
+        prodOutcome?.status === 'unauthorized' ||
+        rateOutcome.status === 'unauthorized' ||
+        historyOutcome.status === 'unauthorized' ||
+        dashOutcome.status === 'unauthorized'
+      ) {
+        resetClientSession();
+        return;
+      }
+
+      if (!canFetchProducts || prodOutcome?.status === 'forbidden') {
+        setProducts([]);
+      } else if (prodOutcome) {
+        if (prodOutcome.status === 'server_error' || prodOutcome.status === 'error') {
           hasDbFailure = true;
         } else if (prodOutcome.data?.success) {
           setProducts(prodOutcome.data.products || []);
@@ -181,15 +196,8 @@ export function useAppSession(params: { onResetNavigation: () => void }) {
         } else {
           hasDbFailure = true;
         }
-      } else {
-        setProducts([]);
       }
 
-      const rateOutcome = await requestJson('/api/tasa');
-      if (rateOutcome.status === 'unauthorized') {
-        resetClientSession();
-        return;
-      }
       if (rateOutcome.status === 'server_error' || rateOutcome.status === 'error') {
         hasDbFailure = true;
       } else if (rateOutcome.status === 'ok') {
@@ -201,22 +209,12 @@ export function useAppSession(params: { onResetNavigation: () => void }) {
         }
       }
 
-      const historyOutcome = await requestJson('/api/tasa?all=true');
-      if (historyOutcome.status === 'unauthorized') {
-        resetClientSession();
-        return;
-      }
       if (historyOutcome.status === 'server_error' || historyOutcome.status === 'error') {
         hasDbFailure = true;
       } else if (historyOutcome.status === 'ok' && historyOutcome.data?.success) {
         setHistoryRates(historyOutcome.data.rates || []);
       }
 
-      const dashOutcome = await requestJson('/api/dashboard');
-      if (dashOutcome.status === 'unauthorized') {
-        resetClientSession();
-        return;
-      }
       if (dashOutcome.status === 'server_error' || dashOutcome.status === 'error') {
         hasDbFailure = true;
       } else if (dashOutcome.status === 'ok') {
@@ -228,7 +226,6 @@ export function useAppSession(params: { onResetNavigation: () => void }) {
         }
       }
 
-      const empresaOutcome = await requestJson('/api/empresa');
       if (
         empresaOutcome.status === 'ok' &&
         empresaOutcome.data?.success &&

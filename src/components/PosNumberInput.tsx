@@ -32,6 +32,10 @@ export interface PosNumberInputProps
   max?: number;
   placeholder?: string;
   className?: string;
+  /** Cuando es true y el valor es 0, muestra vacío en lugar de "0,00" al no tener foco. */
+  allowEmptyDisplay?: boolean;
+  /** Referencia opcional al elemento input nativo para enfocarlo desde atajos. */
+  inputRef?: React.Ref<HTMLInputElement>;
 }
 
 function clampNumericValue(num: number, min: number, max?: number): number {
@@ -44,7 +48,8 @@ function clampNumericValue(num: number, min: number, max?: number): number {
 /**
  * Entrada numérica decimal compatible con teclado físico y teclados móviles (Android/iOS):
  * - Usa inputMode="decimal" y onChange (evita depender de e.key === 'Unidentified' en móvil).
- * - Respeta min y max al salir de foco o al editar.
+ * - Sincroniza cambios externos (ej. botones Quick Tender) incluso cuando el input tiene foco.
+ * - Permite borrar completamente el contenido sin dejar un "0" pegajoso.
  */
 export default function PosNumberInput({
   value,
@@ -56,25 +61,41 @@ export default function PosNumberInput({
   placeholder,
   disabled,
   readOnly,
+  allowEmptyDisplay = false,
+  inputRef,
   onBlur,
   onFocus,
   ...rest
 }: PosNumberInputProps) {
   const [isFocused, setIsFocused] = useState(false);
-  const [draft, setDraft] = useState('');
+  const [editState, setEditState] = useState<{ baseValue: number; draft: string } | null>(null);
 
   const numericValue =
     typeof value === 'number' ? value : parseFloat(String(value || 0).replace(',', '.'));
   const safeValue = Number.isFinite(numericValue) ? numericValue : 0;
 
-  const formattedDisplay = safeValue.toLocaleString('es-VE', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
+  const formattedDisplay =
+    allowEmptyDisplay && safeValue === 0
+      ? ''
+      : safeValue.toLocaleString('es-VE', {
+          minimumFractionDigits: decimals,
+          maximumFractionDigits: decimals,
+        });
+
+  // Si el valor externo cambió (ej. botón Quick Tender), prevalece sobre el borrador previo
+  const focusedDisplay =
+    editState && editState.baseValue === safeValue
+      ? editState.draft
+      : safeValue === 0
+      ? ''
+      : String(Number(safeValue.toFixed(decimals)));
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
     setIsFocused(true);
-    setDraft(safeValue === 0 ? '' : String(Number(safeValue.toFixed(decimals))));
+    setEditState({
+      baseValue: safeValue,
+      draft: safeValue === 0 ? '' : String(Number(safeValue.toFixed(decimals))),
+    });
     onFocus?.(e);
   };
 
@@ -82,33 +103,43 @@ export default function PosNumberInput({
     if (disabled || readOnly) return;
 
     const raw = e.target.value.replace(',', '.');
-    // Permitir vacío o dígitos con a lo sumo un punto decimal
     const sanitized = raw.replace(/[^0-9.]/g, '');
     const parts = sanitized.split('.');
     const normalized =
       parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : sanitized;
 
-    setDraft(normalized);
-
     if (normalized === '' || normalized === '.') {
-      onChange(clampNumericValue(0, min, max));
+      const zeroVal = clampNumericValue(0, min, max);
+      setEditState({ baseValue: zeroVal, draft: normalized });
+      onChange(zeroVal);
       return;
     }
 
     const parsed = parseFloat(normalized);
     if (!isNaN(parsed)) {
       if (max !== undefined && parsed > max) {
-        setDraft(String(max));
+        setEditState({ baseValue: max, draft: String(max) });
         onChange(max);
         return;
       }
-      onChange(Number(parsed.toFixed(decimals)));
+      const rounded = Number(parsed.toFixed(decimals));
+      setEditState({ baseValue: rounded, draft: normalized });
+      onChange(rounded);
     }
   };
 
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     setIsFocused(false);
-    const parsed = parseFloat(draft.replace(',', '.'));
+    const currentDraft = editState && editState.baseValue === safeValue ? editState.draft : '';
+    setEditState(null);
+
+    if (currentDraft === '' && allowEmptyDisplay) {
+      if (safeValue !== 0) onChange(0);
+      onBlur?.(e);
+      return;
+    }
+
+    const parsed = parseFloat(currentDraft.replace(',', '.'));
     const clamped = clampNumericValue(isNaN(parsed) ? safeValue : parsed, min, max);
     if (clamped !== safeValue) {
       onChange(Number(clamped.toFixed(decimals)));
@@ -118,16 +149,17 @@ export default function PosNumberInput({
 
   return (
     <input
+      ref={inputRef}
       type="text"
       inputMode="decimal"
-      value={isFocused ? draft : formattedDisplay}
+      value={isFocused ? focusedDisplay : formattedDisplay}
       onFocus={handleFocus}
       onChange={handleChange}
       onBlur={handleBlur}
       disabled={disabled}
       readOnly={readOnly}
       className={className}
-      placeholder={placeholder || formattedDisplay}
+      placeholder={placeholder || (allowEmptyDisplay ? 'Exacto' : formattedDisplay)}
       {...rest}
     />
   );

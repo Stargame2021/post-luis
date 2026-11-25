@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
 interface DialogProps {
@@ -12,9 +12,12 @@ interface DialogProps {
   maxWidthClass?: string;
   panelClassName?: string;
   closeOnBackdrop?: boolean;
+  closeOnEscape?: boolean;
   showCloseButton?: boolean;
   isDarkMode?: boolean;
   zIndexClass?: string;
+  /** Callback opcional ejecutado tras cerrar el diálogo (ej. devolver foco al escáner F2). */
+  onAfterClose?: () => void;
 }
 
 export default function Dialog({
@@ -26,24 +29,47 @@ export default function Dialog({
   maxWidthClass = 'max-w-lg',
   panelClassName,
   closeOnBackdrop = true,
+  closeOnEscape = true,
   showCloseButton = false,
   isDarkMode = false,
   zIndexClass = 'z-50',
+  onAfterClose,
 }: DialogProps) {
   const generatedId = useId();
   const resolvedTitleId = titleId ?? generatedId;
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+
+  // Capturar el elemento con foco al abrir y restaurar (o delegar a onAfterClose) al cerrar
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      previousFocusRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    } else if (!open && wasOpenRef.current) {
+      wasOpenRef.current = false;
+      if (onAfterClose) {
+        window.requestAnimationFrame(() => onAfterClose());
+      } else if (previousFocusRef.current && previousFocusRef.current.isConnected) {
+        const el = previousFocusRef.current;
+        window.requestAnimationFrame(() => el.focus());
+      }
+      previousFocusRef.current = null;
+    }
+  }, [open, onAfterClose]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !closeOnEscape) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         event.stopPropagation();
         onClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, onClose]);
+  }, [open, closeOnEscape, onClose]);
 
   if (!open) return null;
 
