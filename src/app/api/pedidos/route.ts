@@ -7,6 +7,12 @@ import {
   validateBankAccountCurrency,
   voidLinkedDocumentPayments,
 } from '@/lib/accounting';
+import {
+  calculateLineAmounts,
+  calculateOrderTotals,
+  round2,
+  round3,
+} from '@/lib/pos-calculations';
 
 export interface OrderLineInput {
   producto_id: number;
@@ -184,9 +190,8 @@ export async function POST(req: Request) {
       }
     }
 
-    // 2. Validate products, check stock, calculate taxes
-    let calculatedBaseUsd = 0;
-    let calculatedTaxUsd = 0;
+    // 2. Validate products (ordenados por producto_id para evitar deadlocks en FOR UPDATE), check stock, calculate taxes
+    const orderedItems = [...items].sort((a, b) => Number(a.producto_id) - Number(b.producto_id));
 
     const validatedLines: {
       producto_id: number;
@@ -202,7 +207,7 @@ export async function POST(req: Request) {
       cantidad_base: number;
     }[] = [];
 
-    for (const item of items) {
+    for (const item of orderedItems) {
       const pId = Number(item.producto_id);
       const qty = Number(item.cantidad);
       const presId = item.presentacion_id ? Number(item.presentacion_id) : null;
@@ -213,7 +218,7 @@ export async function POST(req: Request) {
 
       // Lock product for atomic stock check, server price lookup, and discount
       const prodRes = await client.query(
-        `SELECT p.id, p.nombre, p.precio_usd, p.stock_actual, p.impuesto_id,
+        `SELECT p.id, p.nombre, p.precio_usd, p.stock_actual, p.impuesto_id, p.activo,
                 COALESCE(p.unidad_base, 'Unidad') as unidad_base,
                 COALESCE(i.porcentaje, 16.00)::numeric as impuesto_porcentaje
          FROM m_producto p
@@ -227,6 +232,13 @@ export async function POST(req: Request) {
       }
 
       const prod = prodRes.rows[0];
+      if (prod.activo === false) {
+        throw new AccountingError(
+          400,
+          `El producto "${prod.nombre}" está inactivo y no puede venderse.`
+        );
+      }
+
       const stockDisponible = Number(prod.stock_actual) || 0;
 
       // Resolver presentación y precio oficial desde BD (null = unidad base, factor 1)
@@ -249,7 +261,7 @@ export async function POST(req: Request) {
         presRow = presRes.rows[0];
       }
       const unitPrice = resolveServerUnitPrice(prod.precio_usd, presRow);
-      const qtyBase = Number((qty * factor).toFixed(3));
+      const qtyBase = round3(qty * factor);
 
       // Check stock availability (en unidad base)
       if (!permitir_stock_negativo && stockDisponible < qtyBase) {
@@ -260,12 +272,15 @@ export async function POST(req: Request) {
       }
 
       const taxId = prod.impuesto_id || 1;
-      const taxPercent = prod.impuesto_porcentaje !== null && prod.impuesto_porcentaje !== undefined ? Number(prod.impuesto_porcentaje) : 0;
-      const subtotal = Number((qty * unitPrice).toFixed(2));
-      const lineTax = Number(((subtotal * taxPercent) / 100).toFixed(2));
-
-      calculatedBaseUsd += subtotal;
-      calculatedTaxUsd += lineTax;
+      const taxPercent =
+        prod.impuesto_porcentaje !== null && prod.impuesto_porcentaje !== undefined
+          ? Number(prod.impuesto_porcentaje)
+          : 0;
+      const { subtotalUsd: subtotal, montoImpuestoUsd: lineTax } = calculateLineAmounts(
+        unitPrice,
+        qty,
+        taxPercent
+      );
 
       validatedLines.push({
         producto_id: pId,
@@ -288,10 +303,101 @@ export async function POST(req: Request) {
       );
     }
 
-    calculatedBaseUsd = Number(calculatedBaseUsd.toFixed(2));
-    calculatedTaxUsd = Number(calculatedTaxUsd.toFixed(2));
-    const totalUsd = Number((calculatedBaseUsd + calculatedTaxUsd).toFixed(2));
-    const totalLocal = Number((totalUsd * rate).toFixed(2));
+    const orderTotals = calculateOrderTotals(
+      validatedLines.map((l) => ({
+        precioUnitarioUsd: l.precio_unitario_usd,
+        cantidad: l.cantidad,
+        porcentajeImpuesto: l.porcentaje_impuesto,
+      })),
+      rate
+    );
+
+    const calculatedBaseUsd = orderTotals.baseImponibleUsd;
+    const calculatedTaxUsd = orderTotals.montoImpuestoUsd;
+    const totalUsd = orderTotals.totalUsd;
+    const totalLocal = orderTotals.totalLocal;
+
+    const isContado = condicion_pago === 'CONTADO';
+    const hasExplicitPaymentFlag = Boolean(registrar_pago);
+    const parsedMontoPago =
+      monto_pago !== null && monto_pago !== undefined && monto_pago !== ''
+        ? Number(monto_pago)
+        : null;
+
+    // Regla de negocio: en crédito con "registrar abono inicial" activo, exigir abono > 0 y < total
+    if (!isContado && hasExplicitPaymentFlag) {
+      if (parsedMontoPago === null || !Number.isFinite(parsedMontoPago) || parsedMontoPago <= 0) {
+        throw new AccountingError(
+          400,
+          'En ventas a crédito con abono inicial, debes ingresar un monto de abono mayor a 0.'
+        );
+      }
+    }
+
+    const shouldRegisterPayment = isContado
+      ? hasExplicitPaymentFlag
+      : hasExplicitPaymentFlag && parsedMontoPago !== null && parsedMontoPago > 0;
+
+    const effectiveTipoPagoId = shouldRegisterPayment
+      ? Number(tipo_pago_id || 1)
+      : null;
+    const trimmedReferencia =
+      shouldRegisterPayment && referencia_pago ? String(referencia_pago).trim() || null : null;
+
+    // Validar método de pago, referencia, tope de monto y cuenta bancaria ANTES de insertar el pedido
+    let resolvedTpMoneda = 'USD';
+    let pagoOriginal = 0;
+    let pagoEquivUsd = 0;
+
+    if (shouldRegisterPayment) {
+      const tpRes = await client.query(
+        'SELECT id, nombre, moneda, requiere_referencia FROM m_tipopago WHERE id = $1',
+        [effectiveTipoPagoId]
+      );
+      if (tpRes.rows.length === 0) {
+        throw new AccountingError(400, 'El método de pago seleccionado no existe.');
+      }
+
+      const tp = tpRes.rows[0];
+      resolvedTpMoneda = String(tp.moneda);
+
+      if (Boolean(tp.requiere_referencia) && !trimmedReferencia) {
+        throw new AccountingError(
+          400,
+          `El método de pago "${tp.nombre || effectiveTipoPagoId}" requiere número de referencia.`
+        );
+      }
+
+      if (cuenta_bancaria_id) {
+        await validateBankAccountCurrency(client, Number(cuenta_bancaria_id), resolvedTpMoneda);
+      }
+
+      const maxAllowed = resolvedTpMoneda === 'VES' ? totalLocal : totalUsd;
+
+      if (parsedMontoPago !== null) {
+        if (!Number.isFinite(parsedMontoPago) || parsedMontoPago <= 0) {
+          throw new AccountingError(400, 'El monto de pago debe ser mayor a 0.');
+        }
+        if (!isContado && parsedMontoPago >= maxAllowed - 0.005) {
+          throw new AccountingError(
+            400,
+            `El abono inicial (${parsedMontoPago.toFixed(2)}) debe ser menor al total del pedido (${maxAllowed.toFixed(2)} ${resolvedTpMoneda}). Para pago completo usa condición Contado.`
+          );
+        }
+        if (isContado && parsedMontoPago > maxAllowed + 0.01) {
+          throw new AccountingError(
+            400,
+            `El monto del pago (${parsedMontoPago.toFixed(2)}) no puede superar el total del pedido (${maxAllowed.toFixed(2)} ${resolvedTpMoneda}).`
+          );
+        }
+        pagoOriginal = round2(parsedMontoPago);
+      } else {
+        pagoOriginal = maxAllowed;
+      }
+
+      pagoEquivUsd =
+        resolvedTpMoneda === 'VES' ? round2(pagoOriginal / rate) : pagoOriginal;
+    }
 
     // 3. Insert t_pedido
     const insertPedidoSql = `
@@ -313,38 +419,16 @@ export async function POST(req: Request) {
       totalUsd,
       totalLocal,
       condicion_pago,
-      tipo_pago_id ? Number(tipo_pago_id) : 1,
-      referencia_pago ? String(referencia_pago).trim() : null,
+      effectiveTipoPagoId,
+      trimmedReferencia,
       fecha_vencimiento ? String(fecha_vencimiento).trim() : null,
     ]);
 
     const nuevoPedido = pedidoRes.rows[0];
 
-    // Si registrar_pago es true (o no es crédito sin abono inicial), crear registro en t_pago y t_pago_documento
-    if ((registrar_pago && condicion_pago === 'CONTADO') || (registrar_pago && Number(monto_pago) > 0)) {
-      // Obtener y validar moneda del tipo de pago y cuenta bancaria seleccionada
-      const tpRes = await client.query('SELECT id, moneda FROM m_tipopago WHERE id = $1', [
-        Number(tipo_pago_id || 1),
-      ]);
-      if (tpRes.rows.length === 0) {
-        throw new AccountingError(400, 'El método de pago seleccionado no existe.');
-      }
-      const tpMoneda = String(tpRes.rows[0].moneda);
-      if (cuenta_bancaria_id) {
-        await validateBankAccountCurrency(client, Number(cuenta_bancaria_id), tpMoneda);
-      }
-
-      const pagoOriginal =
-        Number(monto_pago) > 0
-          ? Number(monto_pago)
-          : tpMoneda === 'VES'
-          ? totalLocal
-          : totalUsd;
-
-      const pagoEquivUsd =
-        tpMoneda === 'VES' ? Number((pagoOriginal / rate).toFixed(2)) : pagoOriginal;
-
-      const tipoOperacion = condicion_pago === 'CONTADO' ? 'COBRO_VENTA' : 'ABONO_VENTA';
+    // Si corresponde registrar cobro o abono inicial, crear registro en t_pago y t_pago_documento
+    if (shouldRegisterPayment) {
+      const tipoOperacion = isContado ? 'COBRO_VENTA' : 'ABONO_VENTA';
 
       const pagoRes = await client.query(
         `INSERT INTO t_pago (
@@ -357,13 +441,13 @@ export async function POST(req: Request) {
           tipoOperacion,
           nuevoPedido.id,
           assignedTerceroId,
-          Number(tipo_pago_id || 1),
+          effectiveTipoPagoId,
           cuenta_bancaria_id ? Number(cuenta_bancaria_id) : null,
-          tpMoneda,
+          resolvedTpMoneda,
           pagoOriginal,
           rate,
           pagoEquivUsd,
-          referencia_pago ? String(referencia_pago).trim() : null,
+          trimmedReferencia,
           auth.session.user.id,
         ]
       );
