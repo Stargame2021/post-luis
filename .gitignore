@@ -49,3 +49,9 @@ next-env.d.ts
 # auth session secret fallback
 .auth-secret
 
+# AI planning and agent artifacts (kept out of git)
+.ai-planning/
+graphify-out/
+
+
+
